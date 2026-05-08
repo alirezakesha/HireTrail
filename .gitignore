@@ -9,4 +9,4 @@ venv/
 .env
 credentials.json
 token.json
-
+jobtracker.sqlite3
