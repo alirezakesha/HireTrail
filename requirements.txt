@@ -8,4 +8,5 @@ python-dateutil>=2.9.0.post0
 faiss-cpu>=1.8.0
 pandas>=2.2.0
 scikit-learn>=1.5.0
+streamlit>=1.36.0
 

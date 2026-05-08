@@ -62,6 +62,22 @@ This repo includes a starter `.env`. Make sure it includes:
 
 Open and run `gmail.ipynb` top-to-bottom.
 
+## Streamlit dashboard
+
+Run the dashboard (same pipeline, with rerun-safe sync + human confirmation UI):
+
+```bash
+source .venv/bin/activate
+pip install -r requirements.txt
+streamlit run streamlit_app.py
+```
+
+Dashboard features:
+
+- **Setup/Auth**: runs Gmail OAuth and writes `token.json`
+- **Sync**: processes only new Gmail message IDs (no repeated OpenAI calls)
+- **Review & Update**: confirm/override statuses; decisions are stored in `human_reviews` and appended to `app_events`
+
 Key cells:
 
 - **Gmail OAuth cell**: opens a browser to authenticate, creates `token.json`
