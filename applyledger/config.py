@@ -28,7 +28,7 @@ def load_settings() -> Settings:
         gmail_token_file=os.getenv("GMAIL_TOKEN_FILE", "token.json"),
         gmail_scopes=scopes,
         openai_api_key=openai_key,
-        openai_model=os.getenv("OPENAI_MODEL", "gpt-4.1-mini"),
+        openai_model=os.getenv("OPENAI_MODEL", "gpt-5-nano"),
         db_path=os.getenv("JOBTRACKER_DB", "jobtracker.sqlite3"),
     )
 

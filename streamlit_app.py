@@ -1,5 +1,4 @@
 import json
-from pathlib import Path
 from typing import Any
 
 import pandas as pd
@@ -66,38 +65,68 @@ def fetch_applications_df(db_path: str) -> pd.DataFrame:
 
 def fetch_review_candidates(db_path: str, limit: int = 50) -> pd.DataFrame:
     """
-    Candidates = applications currently marked as rejection/interview/confirmation.
-    (You confirm/override; decisions are written to human_reviews + app_events.)
+    Event-based candidates (aligned with notebook events_df).
+    Returns columns needed by tab[2] including a `status` alias for `event_type`.
     """
     conn = connect(db_path)
     try:
-        rows = conn.execute(
+        cur = conn.execute(
             """
-            SELECT a.app_key, a.company, a.job_title, a.job_id, a.status, a.last_update_date, a.last_email_message_id, a.notes, a.confidence
-            FROM applications a
-            ORDER BY a.updated_at DESC
+            SELECT id, app_key, event_type, event_date, gmail_message_id, raw_json, created_at
+            FROM app_events
+            WHERE event_type IN ('application_confirmation', 'rejection', 'interview')
+            ORDER BY created_at DESC
             LIMIT ?;
-            """,
+            """
+            ,
             (limit,),
-        ).fetchall()
+        )
+        rows = cur.fetchall()
+        cols = [d[0] for d in (cur.description or [])]
     finally:
         conn.close()
 
-    return pd.DataFrame(
-        rows,
-        columns=[
-            "app_key",
-            "company",
-            "job_title",
-            "job_id",
-            "status",
-            "last_update_date",
-            "last_email_message_id",
-            "notes",
-            "confidence",
-        ],
-    )
+    df = pd.DataFrame(rows, columns=cols)
+    if df.empty:
+        # Keep expected columns present so UI doesn't crash.
+        return pd.DataFrame(
+            columns=[
+                "event_id",
+                "app_key",
+                "event_type",
+                "status",
+                "event_date",
+                "gmail_message_id",
+                "raw_json",
+                "created_at",
+                "company",
+                "job_title",
+                "job_id",
+                "confidence",
+                "notes",
+            ]
+        )
 
+    df = df.rename(columns={"id": "event_id"})
+
+    def safe_load(s: Any) -> dict[str, Any]:
+        if not s:
+            return {}
+        try:
+            return json.loads(s)
+        except Exception:
+            return {}
+
+    extracted = df["raw_json"].apply(safe_load)
+    df["company"] = extracted.apply(lambda x: x.get("company"))
+    df["job_title"] = extracted.apply(lambda x: x.get("job_title"))
+    df["job_id"] = extracted.apply(lambda x: x.get("job_id"))
+    df["confidence"] = extracted.apply(lambda x: x.get("confidence"))
+    df["notes"] = extracted.apply(lambda x: x.get("notes") or x.get("reason"))
+
+    # UI expects `status` in a couple places; alias event_type -> status.
+    df["status"] = df["event_type"]
+    return df
 
 def process_new_emails(*, query: str, max_results: int, max_body_chars: int) -> dict[str, int]:
     s, gmail, oai = settings_and_clients()
@@ -238,14 +267,14 @@ so you don’t redo work on reruns.
     )
 
     s, gmail, _ = settings_and_clients()
-    df = fetch_review_candidates(s.db_path, limit=50)
+    df = fetch_review_candidates(s.db_path, limit=200)
     if df.empty:
         st.write("No applications yet. Run **Sync** first.")
     else:
         selected_key = st.selectbox(
-            "Pick an application",
-            df["app_key"].tolist(),
-            format_func=lambda k: f"{k} — {df.loc[df['app_key']==k, 'status'].iloc[0]}",
+            "Pick an event (by app_key)",
+            df["app_key"].fillna("unknown").tolist(),
+            format_func=lambda k: f"{k} — {df.loc[df['app_key']==k, 'status'].iloc[0] if 'status' in df.columns else ''}",
         )
 
         row = df[df["app_key"] == selected_key].iloc[0].to_dict()
@@ -257,6 +286,8 @@ so you don’t redo work on reruns.
                 "current_status": row.get("status"),
                 "confidence": row.get("confidence"),
                 "last_update_date": row.get("last_update_date"),
+                "event_date": row.get("event_date"),
+                "event_id": row.get("event_id"),
             }
         )
 
@@ -288,7 +319,7 @@ so you don’t redo work on reruns.
                     app_key=selected_key,
                     decided_status=new_status,
                     note=note or None,
-                    source_event_id=None,
+                    source_event_id=row.get("event_id"),
                     previous_status=row.get("status"),
                 )
                 conn.commit()
