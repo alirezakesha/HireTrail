@@ -1,7 +1,9 @@
+import hashlib
 import json
-from typing import Any
+from typing import Any, Optional
 
 import pandas as pd
+import plotly.express as px
 import streamlit as st
 
 from applyledger.config import load_settings
@@ -19,6 +21,27 @@ from applyledger.gmail_client import extract_bodies, get_gmail_service, header
 
 
 st.set_page_config(page_title="ApplyLedger", layout="wide")
+
+TIMELINE_OUTCOME_LABELS: tuple[str, ...] = (
+    "Rejected",
+    "Interview (no rejection logged)",
+    "Open / pending",
+)
+
+
+def _timeline_outcome_to_status(display_label: str) -> str:
+    m = {
+        "Rejected": "rejection",
+        "Interview (no rejection logged)": "interview",
+        "Open / pending": "follow_up",
+    }
+    if display_label not in m:
+        raise ValueError(f"Unknown outcome label: {display_label!r}")
+    return m[display_label]
+
+
+def _timeline_row_widget_key(app_key: str) -> str:
+    return "tl_o_" + hashlib.md5(app_key.encode("utf-8")).hexdigest()
 
 
 @st.cache_resource
@@ -61,6 +84,141 @@ def fetch_applications_df(db_path: str) -> pd.DataFrame:
         "updated_at",
     ]
     return pd.DataFrame(rows, columns=cols)
+
+
+def _normalize_timeline_event_type(event_type: str | None) -> Optional[str]:
+    if not event_type:
+        return None
+    if event_type in ("application_confirmation", "rejection", "interview"):
+        return event_type
+    if event_type.startswith("manual:"):
+        tail = event_type.split(":", 1)[1]
+        if tail in ("application_confirmation", "rejection", "interview"):
+            return tail
+    return None
+
+
+def _timeline_label_field(x: Any) -> str:
+    try:
+        if x is None or pd.isna(x):
+            return "?"
+    except TypeError:
+        if x is None:
+            return "?"
+    s = str(x).strip()
+    return s if s else "?"
+
+
+@st.cache_data(ttl=30)
+def fetch_application_timeline_chart(db_path: str) -> pd.DataFrame:
+    """
+    One row per application for a Gantt-style chart: bar from first apply signal to rejection or 'today'.
+    Uses app_events (including manual:* decisions) plus applications.applied_date as fallback.
+    """
+    conn = connect(db_path)
+    try:
+        apps = pd.read_sql(
+            """
+            SELECT app_key, company, job_title, job_id, applied_date, status, last_update_date
+            FROM applications;
+            """,
+            conn,
+        )
+        ev = pd.read_sql(
+            """
+            SELECT app_key, event_type, event_date
+            FROM app_events
+            WHERE event_date IS NOT NULL AND TRIM(event_date) != '';
+            """,
+            conn,
+        )
+    finally:
+        conn.close()
+
+    if apps.empty:
+        return pd.DataFrame()
+
+    if not ev.empty:
+        ev = ev.copy()
+        ev["etype"] = ev["event_type"].apply(_normalize_timeline_event_type)
+        ev = ev.dropna(subset=["etype"])
+        ev["dt"] = pd.to_datetime(ev["event_date"], utc=True, errors="coerce", format="mixed")
+        ev = ev.dropna(subset=["dt"])
+        first_by = ev.groupby(["app_key", "etype"], as_index=False)["dt"].min()
+        if first_by.empty:
+            m = apps.copy()
+        else:
+            pivot = first_by.pivot(index="app_key", columns="etype", values="dt").reset_index()
+            m = apps.merge(pivot, on="app_key", how="left")
+    else:
+        m = apps.copy()
+
+    for col in ("application_confirmation", "rejection", "interview"):
+        if col not in m.columns:
+            m[col] = pd.NaT
+
+    for col in ("applied_date", "last_update_date"):
+        if col in m.columns:
+            m[col] = pd.to_datetime(m[col], utc=True, errors="coerce", format="mixed")
+
+    m["start"] = m["application_confirmation"].combine_first(m["applied_date"]).combine_first(m["last_update_date"])
+    m = m[m["start"].notna()].copy()
+
+    now = pd.Timestamp.now(tz="UTC")
+    m["end"] = m["rejection"].where(m["rejection"].notna(), now)
+
+    bad = m["end"] < m["start"]
+    m.loc[bad, "end"] = m.loc[bad, "start"] + pd.Timedelta(days=1)
+
+    def label_row(r: pd.Series) -> str:
+        c = _timeline_label_field(r.get("company"))
+        t = _timeline_label_field(r.get("job_title"))
+        return f"{c[:42]} — {t[:42]}"
+
+    m["label"] = m.apply(label_row, axis=1)
+
+    vc = m["label"].value_counts()
+    dup = vc[vc > 1].index
+    if len(dup):
+        m.loc[m["label"].isin(dup), "label"] = m.loc[m["label"].isin(dup), "label"] + m.loc[
+            m["label"].isin(dup), "app_key"
+        ].astype(str).map(lambda k: f" [{k[-10:]}]")
+
+    m = m.sort_values("start", ascending=False)
+
+    def _outcome_from_row(r: pd.Series) -> str:
+        st_raw = r.get("status")
+        if st_raw is not None and not (isinstance(st_raw, float) and pd.isna(st_raw)):
+            st = str(st_raw).strip()
+            if st == "rejection":
+                return "Rejected"
+            if st == "interview":
+                return "Interview (no rejection logged)"
+            if st in ("follow_up", "offer", "other"):
+                return "Open / pending"
+        if pd.notna(r.get("rejection")):
+            return "Rejected"
+        if pd.notna(r.get("interview")):
+            return "Interview (no rejection logged)"
+        return "Open / pending"
+
+    m["outcome"] = m.apply(_outcome_from_row, axis=1)
+
+    return m[
+        [
+            "app_key",
+            "label",
+            "start",
+            "end",
+            "outcome",
+            "company",
+            "job_title",
+            "job_id",
+            "status",
+            "interview",
+            "rejection",
+        ]
+    ].rename(columns={"interview": "interview_at", "rejection": "rejection_at"})
 
 
 def fetch_review_candidates(db_path: str, limit: int = 50) -> pd.DataFrame:
@@ -214,7 +372,7 @@ with st.sidebar:
     st.write("Stored categories:", ", ".join(sorted(ALLOWED_APP_CATEGORIES)))
 
 
-tabs = st.tabs(["1) Setup", "2) Sync", "3) Review & Update", "4) Applications"])
+tabs = st.tabs(["1) Setup", "2) Sync", "3) Review & Update", "4) Applications", "5) Timeline"])
 
 
 with tabs[0]:
@@ -336,4 +494,154 @@ with tabs[3]:
         st.write("No applications yet. Run **Sync** first.")
     else:
         st.dataframe(apps, use_container_width=True, hide_index=True)
+
+
+with tabs[4]:
+    st.subheader("Application timeline (Gantt-style)")
+    st.caption(
+        "Each row is one application. Bars run from the first apply signal (confirmation or `applied_date`) "
+        "to the first rejection date, or to **today** if there is no rejection yet. Includes `manual:*` review events."
+    )
+    s, _, _ = settings_and_clients()
+    tl = fetch_application_timeline_chart(s.db_path)
+    if not tl.empty:
+        tl = tl.copy(deep=True)
+    if tl.empty:
+        st.info("No timeline data yet. Run **Sync** (and ensure applications have dates) first.")
+    else:
+        outcomes = sorted(tl["outcome"].dropna().unique().tolist())
+        pick = st.multiselect("Filter by outcome", options=outcomes, default=outcomes)
+        q = st.text_input("Filter label (contains)", value="", placeholder="company or role…")
+        view = tl[tl["outcome"].isin(pick)] if pick else tl
+        if q.strip():
+            ql = q.strip().lower()
+            view = view[view["label"].str.lower().str.contains(ql, na=False)]
+        view = view.copy(deep=True)
+
+        if view.empty:
+            st.warning("No rows match the filters.")
+        else:
+            hover_cols = {
+                "company": True,
+                "job_title": True,
+                "job_id": True,
+                "interview_at": True,
+                "rejection_at": True,
+            }
+            fig = px.timeline(
+                view,
+                x_start="start",
+                x_end="end",
+                y="label",
+                color="outcome",
+                hover_name="label",
+                hover_data=hover_cols,
+            )
+            fig.update_yaxes(autorange="reversed", title="")
+            fig.update_xaxes(title="Date (UTC)")
+            fig.update_layout(
+                title="Applied → rejection (or ongoing to today)",
+                legend_title="Outcome",
+                height=max(420, min(28 * len(view), 2400)),
+                margin=dict(l=40, r=40, t=56, b=40),
+                bargap=0.15,
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
+            st.divider()
+            st.subheader("Underlying rows")
+            st.caption(
+                "Use the **Outcome** dropdown on each row, then **Save outcome changes**. "
+                "(`Open / pending` is stored as `follow_up`.)"
+            )
+
+            view_reset = view.reset_index(drop=True).copy(deep=True)
+
+            display_only = view_reset[
+                ["label", "start", "outcome", "company", "job_title", "job_id", "interview_at", "rejection_at"]
+            ].copy()
+
+            def _cell_str(x: Any) -> str:
+                if x is None or (isinstance(x, float) and pd.isna(x)):
+                    return ""
+                return str(x).strip()
+
+            for c in ("company", "job_title", "job_id"):
+                display_only[c] = display_only[c].map(_cell_str)
+
+            for c in ("start", "interview_at", "rejection_at"):
+                display_only[c] = (
+                    pd.to_datetime(view_reset[c], utc=True, errors="coerce")
+                    .dt.strftime("%Y-%m-%d %H:%M")
+                    .fillna("—")
+                )
+
+            st.dataframe(display_only, use_container_width=True, hide_index=True)
+
+            st.markdown("**Change outcome**")
+            max_edit = 120
+            if len(view_reset) > max_edit:
+                st.warning(
+                    f"Outcome dropdowns are shown for the first **{max_edit}** rows only. "
+                    "Narrow filters to edit the rest."
+                )
+            edit_rows = min(len(view_reset), max_edit)
+
+            for i in range(edit_rows):
+                ak = str(view_reset["app_key"].iloc[i])
+                row_key = _timeline_row_widget_key(ak)
+                cur = view_reset["outcome"].iloc[i]
+                try:
+                    idx_o = list(TIMELINE_OUTCOME_LABELS).index(cur)
+                except ValueError:
+                    idx_o = 0
+                lab = str(view_reset["label"].iloc[i])
+                short = lab if len(lab) <= 100 else lab[:97] + "…"
+                c1, c2 = st.columns([4, 2], gap="small")
+                with c1:
+                    st.caption(f"{i + 1}. {short}")
+                with c2:
+                    st.selectbox(
+                        "Outcome",
+                        list(TIMELINE_OUTCOME_LABELS),
+                        index=idx_o,
+                        key=row_key,
+                        label_visibility="collapsed",
+                    )
+
+            if st.button("Save outcome changes", type="primary"):
+                changed = 0
+                conn = connect(s.db_path)
+                try:
+                    for i in range(edit_rows):
+                        ak = str(view_reset["app_key"].iloc[i])
+                        row_key = _timeline_row_widget_key(ak)
+                        old_o = view_reset["outcome"].iloc[i]
+                        new_o = st.session_state.get(row_key, old_o)
+                        if str(new_o) == str(old_o):
+                            continue
+                        decided = _timeline_outcome_to_status(str(new_o))
+                        prev = view_reset["status"].iloc[i]
+                        prev_s = None if prev is None or (isinstance(prev, float) and pd.isna(prev)) else str(prev)
+                        add_human_review(
+                            conn,
+                            app_key=ak,
+                            decided_status=decided,
+                            note="Timeline tab outcome update",
+                            source_event_id=None,
+                            previous_status=prev_s,
+                        )
+                        changed += 1
+                    conn.commit()
+                finally:
+                    conn.close()
+                fetch_application_timeline_chart.clear()
+                for k in list(st.session_state.keys()):
+                    if isinstance(k, str) and k.startswith("tl_o_"):
+                        del st.session_state[k]
+                if changed:
+                    st.success(f"Saved {changed} outcome update(s). Refreshing…")
+                else:
+                    st.info("No outcome edits to save.")
+                st.rerun()
 
