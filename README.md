@@ -25,6 +25,32 @@ Track your job applications directly from Gmail: connect with OAuth, classify ap
 - `requirements.txt`: Python dependencies
 - `jobtracker.sqlite3`: local database created by the notebook
 
+## Web UI (Vite + FastAPI)
+
+The React app under `frontend/` expects a local API. Run **two** processes from the repo root:
+
+**1) Python API (port 8000)**
+
+```bash
+source .venv/bin/activate
+pip install -r requirements.txt
+uvicorn applyledger.api_server:app --reload --host 127.0.0.1 --port 8000
+```
+
+**2) Frontend dev server**
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+Then open the URL Vite prints (usually `http://127.0.0.1:5173`). The Vite config proxies `/api` to the FastAPI server.
+
+- `GET /health` — quick health check
+- `GET /api/meta`, `GET /api/applications`, `GET /api/timeline`, … — data for the UI
+- `POST /api/auth/gmail`, `POST /api/sync` — same Gmail + OpenAI pipeline as the notebooks (requires `.env`, `credentials.json`, and optional `token.json`)
+
 ## Setup
 
 ### 1) Create a virtual environment

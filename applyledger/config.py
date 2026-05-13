@@ -12,6 +12,10 @@ class Settings:
     openai_api_key: str
     openai_model: str
     db_path: str
+    """Same as `gmail_batch.ipynb` / `OPENAI_CLASSIFY_BATCH_SIZE`."""
+    openai_classify_batch_size: int
+    """Same as `gmail_batch.ipynb` / `GMAIL_FETCH_BATCH_SIZE`."""
+    gmail_fetch_batch_size: int
 
 
 def load_settings() -> Settings:
@@ -30,5 +34,7 @@ def load_settings() -> Settings:
         openai_api_key=openai_key,
         openai_model=os.getenv("OPENAI_MODEL", "gpt-5-nano"),
         db_path=os.getenv("JOBTRACKER_DB", "jobtracker.sqlite3"),
+        openai_classify_batch_size=int(os.getenv("OPENAI_CLASSIFY_BATCH_SIZE", "12")),
+        gmail_fetch_batch_size=int(os.getenv("GMAIL_FETCH_BATCH_SIZE", "50")),
     )
 

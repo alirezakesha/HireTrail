@@ -29,6 +29,11 @@ Return ONLY valid JSON matching this schema:
   },
   "notes": string | null
 }
+
+Rules:
+- If it is not about a job application process (e.g. grocery promos, receipts), set is_job_related=false.
+- If it's about a job posting alert or LinkedIn "add connection" etc, keep is_job_related=true but category="job_alert" or "other".
+- Prefer company/job_title/job_id only when clearly supported; otherwise null.
 """
 
 
@@ -43,6 +48,27 @@ def html_to_text(html: str) -> str:
 
 def build_client(openai_api_key: str) -> OpenAI:
     return OpenAI(api_key=openai_api_key)
+
+
+def _output_token_kwargs(model: str, cap: int = 250) -> dict[str, int]:
+    """gpt-5 / o-series reject max_tokens; they require max_completion_tokens."""
+    m = (model or "").lower()
+    if m.startswith(("gpt-5", "o1", "o3", "o4")):
+        return {"max_completion_tokens": cap}
+    return {"max_tokens": cap}
+
+
+def _temperature_kwargs(model: str) -> dict[str, float]:
+    """Some models only support the default temperature (1); passing 0 returns 400."""
+    m = (model or "").lower()
+    if m.startswith(("gpt-5", "o1", "o3", "o4")):
+        return {}
+    return {"temperature": 0.0}
+
+
+def openai_chat_completion_kwargs(model: str, *, completion_cap: int = 250) -> dict[str, Any]:
+    """Extra kwargs for chat.completions.create (matches `gmail_batch.ipynb` + newer OpenAI models)."""
+    return {**_temperature_kwargs(model), **_output_token_kwargs(model, completion_cap)}
 
 
 def classify_email_with_openai(
@@ -66,13 +92,12 @@ def classify_email_with_openai(
 
     resp = client.chat.completions.create(
         model=model,
-        temperature=0,
         messages=[
             {"role": "system", "content": JOB_EMAIL_SYSTEM_PROMPT},
             {"role": "user", "content": json.dumps(user_content, ensure_ascii=False)},
         ],
         response_format={"type": "json_object"},
-        max_tokens=250,
+        **openai_chat_completion_kwargs(model, completion_cap=250),
     )
 
     content = resp.choices[0].message.content or "{}"
