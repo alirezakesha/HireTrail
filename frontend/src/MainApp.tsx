@@ -1,9 +1,8 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useCallback, useState } from 'react'
-import { apiGet, type ApplicationRow, type Meta, type ReviewEventRow, type TimelineRow } from './api'
+import { apiGet, type ApplicationRow, type TimelineRow } from './api'
 import { ApplicationBoard } from './features/applications/ApplicationBoard'
-import { Overview } from './features/overview/Overview'
-import { ReviewPanel } from './features/review/ReviewPanel'
+import { EmbeddingMergePanel } from './features/embedding-merge/EmbeddingMergePanel'
 import { SyncPanel } from './features/sync/SyncPanel'
 import { TimelinePanel } from './features/timeline/TimelinePanel'
 import { useEnrichedApplications } from './hooks/useEnrichedApplications'
@@ -19,7 +18,6 @@ export function MainApp({ onSignOut }: Props) {
 
   const invalidateData = useCallback(() => {
     void qc.invalidateQueries({ queryKey: ['applications'] })
-    void qc.invalidateQueries({ queryKey: ['review-events'] })
     void qc.invalidateQueries({ queryKey: ['timeline'] })
     void qc.invalidateQueries({ queryKey: ['meta'] })
   }, [qc])
@@ -28,21 +26,10 @@ export function MainApp({ onSignOut }: Props) {
     void qc.invalidateQueries({ queryKey: ['timeline'] })
   }, [qc])
 
-  const metaQ = useQuery({
-    queryKey: ['meta'],
-    queryFn: () => apiGet<Meta>('/api/meta'),
-  })
-
   const appsQ = useQuery({
     queryKey: ['applications'],
     queryFn: () => apiGet<ApplicationRow[]>('/api/applications'),
-    enabled: tab === 'Applications' || tab === 'Overview',
-  })
-
-  const eventsQ = useQuery({
-    queryKey: ['review-events'],
-    queryFn: () => apiGet<ReviewEventRow[]>('/api/events/review?limit=200'),
-    enabled: tab === 'Review',
+    enabled: tab === 'Applications',
   })
 
   const timelineQ = useQuery({
@@ -59,17 +46,8 @@ export function MainApp({ onSignOut }: Props) {
 
   return (
     <AppShell tab={tab} onTab={setTab} onSignOut={onSignOut}>
-      {tab === 'Overview' && (
-        <Overview
-          meta={metaQ.data}
-          metaLoading={metaQ.isLoading}
-          metaError={metaQ.error}
-          appCount={appsQ.data?.length}
-          appsLoading={appsQ.isLoading}
-        />
-      )}
       {tab === 'Sync' && <SyncPanel onSynced={invalidateData} />}
-      {tab === 'Review' && <ReviewPanel data={eventsQ.data} loading={eventsQ.isLoading} error={eventsQ.error} />}
+      {tab === 'Smart merge' && <EmbeddingMergePanel />}
       {tab === 'Applications' && (
         <ApplicationBoard
           rows={enriched}

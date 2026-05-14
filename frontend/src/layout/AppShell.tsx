@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react'
 import { TabButton } from '../components/ui/TabButton'
 
-export const MAIN_TABS = ['Applications', 'Overview', 'Sync', 'Review', 'Timeline'] as const
+export const MAIN_TABS = ['Applications', 'Smart merge', 'Sync', 'Timeline'] as const
 export type MainTab = (typeof MAIN_TABS)[number]
 
 type Props = {
@@ -23,7 +23,8 @@ export function AppShell({ tab, onTab, onSignOut, children }: Props) {
             ApplyLedger
           </h1>
           <p className="mt-2 max-w-xl text-sm leading-relaxed text-[var(--color-muted)]">
-            Gmail → OpenAI → SQLite. Browse applications, then use Sync or Review when you need to refresh data.
+            Gmail → OpenAI → SQLite. Browse applications, use Smart merge for embedding-based duplicate detection, sync
+            from Gmail, or refine outcomes on the timeline.
           </p>
         </div>
         <div className="flex flex-col items-stretch gap-3 sm:items-end">

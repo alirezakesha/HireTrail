@@ -22,6 +22,7 @@ from pydantic import BaseModel, Field
 
 from applyledger import db
 from applyledger.config import load_settings
+from applyledger.embedding_merge import compute_embedding_merge_suggestions
 from applyledger.gmail_client import get_gmail_service
 from applyledger.sync_service import ensure_credentials_files, run_sync
 
@@ -64,6 +65,7 @@ def _meta_payload() -> dict[str, Any]:
     return {
         "ready": ready,
         "openai_model": getattr(s, "openai_model", None) if s else None,
+        "openai_embedding_model": getattr(s, "openai_embedding_model", None) if s else None,
         "db_file": str(Path(path).resolve()) if db_ok else path,
         "gmail_token_file": getattr(s, "gmail_token_file", None) if s else os.getenv("GMAIL_TOKEN_FILE", "token.json"),
         "error": err if err else (None if ready else "Database or OpenAI not configured; check .env and JOBTRACKER_DB."),
@@ -88,6 +90,48 @@ def api_applications() -> list[dict[str, Any]]:
             """
         ).fetchall()
         return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+class MergeApplicationsBody(BaseModel):
+    app_key_a: str
+    app_key_b: str
+
+
+class EmbeddingMergeSuggestionsBody(BaseModel):
+    top_k: int = Field(default=3, ge=1, le=10)
+
+
+@app.post("/api/applications/embedding-merge-suggestions")
+def api_embedding_merge_suggestions(
+    body: EmbeddingMergeSuggestionsBody = EmbeddingMergeSuggestionsBody(),
+) -> dict[str, Any]:
+    """OpenAI embeddings + cosine similarity; can take tens of seconds on large DBs."""
+    s, err = _settings_or_error()
+    if err or not s:
+        raise HTTPException(status_code=503, detail=err or "Settings not loaded")
+    top_k = body.top_k
+    conn = _conn()
+    try:
+        try:
+            return compute_embedding_merge_suggestions(conn, s, top_k=top_k)
+        except Exception as e:  # noqa: BLE001
+            raise HTTPException(status_code=502, detail=f"Embedding suggestions failed: {e}") from e
+    finally:
+        conn.close()
+
+
+@app.post("/api/applications/merge")
+def api_merge_applications(body: MergeApplicationsBody) -> dict[str, str]:
+    conn = _conn()
+    try:
+        try:
+            result = db.merge_application_pair(conn, app_key_a=body.app_key_a.strip(), app_key_b=body.app_key_b.strip())
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        conn.commit()
+        return result
     finally:
         conn.close()
 

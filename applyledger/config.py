@@ -16,6 +16,10 @@ class Settings:
     openai_classify_batch_size: int
     """Same as `gmail_batch.ipynb` / `GMAIL_FETCH_BATCH_SIZE`."""
     gmail_fetch_batch_size: int
+    """OpenAI embedding model for merge suggestions (`gmail.ipynb` uses text-embedding-3-small)."""
+    openai_embedding_model: str
+    """Batch size for `client.embeddings.create` input lists."""
+    embedding_batch_size: int
 
 
 def load_settings() -> Settings:
@@ -36,5 +40,7 @@ def load_settings() -> Settings:
         db_path=os.getenv("JOBTRACKER_DB", "jobtracker.sqlite3"),
         openai_classify_batch_size=int(os.getenv("OPENAI_CLASSIFY_BATCH_SIZE", "12")),
         gmail_fetch_batch_size=int(os.getenv("GMAIL_FETCH_BATCH_SIZE", "50")),
+        openai_embedding_model=os.getenv("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small"),
+        embedding_batch_size=int(os.getenv("OPENAI_EMBEDDING_BATCH_SIZE", "64")),
     )
 

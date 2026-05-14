@@ -1,6 +1,7 @@
 export type Meta = {
   ready: boolean
   openai_model?: string
+  openai_embedding_model?: string
   db_file?: string
   gmail_token_file?: string
   error?: string
@@ -19,22 +20,6 @@ export type ApplicationRow = {
   confidence: number | null
   notes: string | null
   updated_at: string | null
-}
-
-export type ReviewEventRow = {
-  event_id: number
-  app_key: string
-  event_type: string
-  status: string
-  event_date: string | null
-  gmail_message_id: string | null
-  raw_json: string | null
-  created_at: string | null
-  company: string | null
-  job_title: string | null
-  job_id: string | null
-  confidence: number | null
-  notes: string | null
 }
 
 export type TimelineRow = {
@@ -56,6 +41,32 @@ export type SyncStats = {
   skipped: number
   processed_now: number
   stored_app_records: number
+}
+
+export type EmbeddingMergeAppSummary = {
+  app_key: string
+  company: string | null
+  job_title: string | null
+  job_id: string | null
+  status: string
+  applied_date?: string | null
+  last_update_date: string | null
+  confidence: number | null
+  notes: string | null
+  updated_at: string | null
+}
+
+export type EmbeddingMergeSuggestionItem = {
+  confirmation: EmbeddingMergeAppSummary
+  candidates: { rejection: EmbeddingMergeAppSummary; cosine_similarity: number }[]
+}
+
+export type EmbeddingMergeSuggestionsResponse = {
+  items: EmbeddingMergeSuggestionItem[]
+  embedding_model: string
+  /** Minimum cosine similarity between `app_key` embeddings required to show a candidate (e.g. 0.9). */
+  min_cosine_similarity: number
+  hint: string | null
 }
 
 /** Avoid hanging forever when the API is down or the Vite proxy target is not running. */

@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { apiPost } from '../../api'
 import { Card } from '../../components/ui/Card'
 import { REVIEW_STATUSES } from '../../constants/statuses'
@@ -11,6 +11,37 @@ function fmtDate(s: string | null | undefined) {
   return d.length === 10 ? d : s.slice(0, 16).replace('T', ' ')
 }
 
+function parseTimeMs(iso: string | null | undefined): number {
+  if (!iso) return 0
+  const t = Date.parse(iso)
+  return Number.isFinite(t) ? t : 0
+}
+
+function effectiveAppliedAt(r: { applied_date?: string | null; last_update_date: string | null; last_email_date_raw: string | null }) {
+  return r.applied_date ?? r.last_update_date ?? r.last_email_date_raw
+}
+
+const DRAG_APP_KEY_MIME = 'application/x-applyledger-app-key'
+
+function canMergePair(a: EnrichedApplication, b: EnrichedApplication) {
+  const s = new Set([a.status, b.status])
+  return s.has('rejection') && s.has('application_confirmation')
+}
+
+function isMergeParticipant(r: EnrichedApplication) {
+  return r.status === 'rejection' || r.status === 'application_confirmation'
+}
+
+export const APPLICATION_SORT_MODES = [
+  { id: 'updated_desc', label: 'Latest updated first' },
+  { id: 'updated_asc', label: 'Oldest updated first' },
+  { id: 'applied_desc', label: 'Latest applied first' },
+  { id: 'applied_asc', label: 'Oldest applied first' },
+  { id: 'company_asc', label: 'Company A–Z' },
+] as const
+
+export type ApplicationSortMode = (typeof APPLICATION_SORT_MODES)[number]['id']
+
 type Props = {
   rows: EnrichedApplication[]
   loading: boolean
@@ -19,8 +50,11 @@ type Props = {
 
 export function ApplicationBoard({ rows, loading, error }: Props) {
   const qc = useQueryClient()
+  const dragSourceKeyRef = useRef<string | null>(null)
+  const [dropHighlightKey, setDropHighlightKey] = useState<string | null>(null)
   const [q, setQ] = useState('')
   const [statusFilter, setStatusFilter] = useState<string>('all')
+  const [sortMode, setSortMode] = useState<ApplicationSortMode>('updated_desc')
   const [draft, setDraft] = useState<Record<string, string>>({})
 
   const statuses = useMemo(() => [...new Set(rows.map((r) => r.status))].sort(), [rows])
@@ -41,6 +75,49 @@ export function ApplicationBoard({ rows, loading, error }: Props) {
     return v
   }, [rows, q, statusFilter])
 
+  const sorted = useMemo(() => {
+    const v = [...filtered]
+    switch (sortMode) {
+      case 'updated_desc':
+        v.sort((a, b) => parseTimeMs(b.updated_at) - parseTimeMs(a.updated_at))
+        break
+      case 'updated_asc':
+        v.sort((a, b) => parseTimeMs(a.updated_at) - parseTimeMs(b.updated_at))
+        break
+      case 'applied_desc':
+        v.sort(
+          (a, b) =>
+            parseTimeMs(effectiveAppliedAt(b)) - parseTimeMs(effectiveAppliedAt(a)),
+        )
+        break
+      case 'applied_asc':
+        v.sort(
+          (a, b) =>
+            parseTimeMs(effectiveAppliedAt(a)) - parseTimeMs(effectiveAppliedAt(b)),
+        )
+        break
+      case 'company_asc':
+        v.sort((a, b) =>
+          (a.company ?? '').localeCompare(b.company ?? '', undefined, { sensitivity: 'base' }),
+        )
+        break
+      default:
+        break
+    }
+    return v
+  }, [filtered, sortMode])
+
+  const rowByKey = useMemo(() => new Map(rows.map((r) => [r.app_key, r])), [rows])
+
+  const mergeM = useMutation({
+    mutationFn: (payload: { app_key_a: string; app_key_b: string }) =>
+      apiPost<{ kept_app_key: string; removed_app_key: string }>('/api/applications/merge', payload),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['applications'] })
+      void qc.invalidateQueries({ queryKey: ['timeline'] })
+    },
+  })
+
   const saveM = useMutation({
     mutationFn: (payload: { app_key: string; decided_status: string; previous_status: string }) =>
       apiPost('/api/review', {
@@ -58,7 +135,6 @@ export function ApplicationBoard({ rows, loading, error }: Props) {
       })
       void qc.invalidateQueries({ queryKey: ['applications'] })
       void qc.invalidateQueries({ queryKey: ['timeline'] })
-      void qc.invalidateQueries({ queryKey: ['review-events'] })
     },
   })
 
@@ -111,18 +187,101 @@ export function ApplicationBoard({ rows, loading, error }: Props) {
             ))}
           </select>
         </div>
+        <div className="min-w-[200px] sm:min-w-[220px]">
+          <label className="text-xs font-medium uppercase tracking-wide text-[var(--color-muted)]">
+            Sort by
+          </label>
+          <select
+            value={sortMode}
+            onChange={(e) => setSortMode(e.target.value as ApplicationSortMode)}
+            className="mt-2 w-full rounded-xl border border-[var(--color-border)] bg-black/25 px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-[var(--color-accent)]/40"
+          >
+            {APPLICATION_SORT_MODES.map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.label}
+              </option>
+            ))}
+          </select>
+        </div>
         <p className="text-sm text-[var(--color-muted)]">
-          Showing <span className="font-medium text-[var(--color-ink)]">{filtered.length}</span> of {rows.length}
+          Showing <span className="font-medium text-[var(--color-ink)]">{sorted.length}</span> of {rows.length}
+        </p>
+        <p className="w-full text-xs leading-relaxed text-[var(--color-muted)] sm:col-span-2 xl:col-span-4">
+          <span className="font-medium text-[var(--color-ink)]">Merge:</span> drag one card onto another only when one row is saved as{' '}
+          <span className="font-mono text-[var(--color-accent)]">rejection</span> and the other as{' '}
+          <span className="font-mono text-[var(--color-accent)]">application_confirmation</span> (exact status strings from the
+          database). The confirmation row is kept and updated; the rejection row is removed. Pairs like two rejections,
+          two confirmations, or interview/follow_up cannot merge. Unsaved status changes in the dropdown are not
+          used—save first, or merge using the current stored statuses.
         </p>
       </Card>
 
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-        {filtered.map((r) => {
-          const applied = r.applied_date ?? r.last_update_date ?? r.last_email_date_raw
+        {sorted.map((r) => {
+          const applied = effectiveAppliedAt(r)
           const current = statusForRow(r)
           const dirty = current !== r.status
+          const draggableMerge = isMergeParticipant(r)
+          const fromKey = dragSourceKeyRef.current
+          const targetKey = r.app_key
+          const pairOk =
+            !!fromKey &&
+            fromKey !== targetKey &&
+            (() => {
+              const a = rowByKey.get(fromKey)
+              const b = rowByKey.get(targetKey)
+              return !!(a && b && canMergePair(a, b))
+            })()
+
           return (
-            <Card key={r.app_key} className="flex flex-col gap-4 p-5">
+            <Card
+              key={r.app_key}
+              draggable={draggableMerge}
+              onDragStart={(e) => {
+                if (!draggableMerge) return
+                dragSourceKeyRef.current = r.app_key
+                e.dataTransfer.setData(DRAG_APP_KEY_MIME, r.app_key)
+                e.dataTransfer.effectAllowed = 'move'
+              }}
+              onDragEnd={() => {
+                dragSourceKeyRef.current = null
+                setDropHighlightKey(null)
+              }}
+              onDragOver={(e) => {
+                if (!dragSourceKeyRef.current || dragSourceKeyRef.current === targetKey) return
+                const a = rowByKey.get(dragSourceKeyRef.current)
+                const b = rowByKey.get(targetKey)
+                if (a && b && canMergePair(a, b)) {
+                  e.preventDefault()
+                  e.dataTransfer.dropEffect = 'move'
+                  setDropHighlightKey((h) => (h === targetKey ? h : targetKey))
+                }
+              }}
+              onDragLeave={(e) => {
+                if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+                  setDropHighlightKey((h) => (h === targetKey ? null : h))
+                }
+              }}
+              onDrop={(e) => {
+                e.preventDefault()
+                const dragged =
+                  e.dataTransfer.getData(DRAG_APP_KEY_MIME) || dragSourceKeyRef.current || ''
+                dragSourceKeyRef.current = null
+                setDropHighlightKey(null)
+                if (!dragged || dragged === targetKey) return
+                const a = rowByKey.get(dragged)
+                const b = rowByKey.get(targetKey)
+                if (!a || !b || !canMergePair(a, b)) return
+                const conf = a.status === 'application_confirmation' ? a : b
+                const rej = a.status === 'rejection' ? a : b
+                const msg = `Merge rejection "${rej.company ?? rej.app_key}" into application "${conf.company ?? conf.app_key}"? The rejection row will be deleted.`
+                if (!window.confirm(msg)) return
+                mergeM.mutate({ app_key_a: dragged, app_key_b: targetKey })
+              }}
+              className={`flex flex-col gap-4 p-5 transition-shadow ${
+                draggableMerge ? 'cursor-grab active:cursor-grabbing' : ''
+              } ${dropHighlightKey === r.app_key && pairOk ? 'ring-2 ring-[var(--color-accent)] ring-offset-2 ring-offset-[var(--color-surface)]' : ''}`}
+            >
               <div>
                 <h3 className="font-display text-lg font-semibold leading-snug text-[var(--color-ink)]">
                   {r.company ?? 'Unknown company'}
@@ -196,6 +355,12 @@ export function ApplicationBoard({ rows, loading, error }: Props) {
           )
         })}
       </div>
+
+      {mergeM.isError && (
+        <Card className="border-[var(--color-danger)]/40 bg-[var(--color-danger)]/5">
+          <p className="text-sm text-[var(--color-danger)]">{(mergeM.error as Error).message}</p>
+        </Card>
+      )}
 
       {saveM.isError && (
         <Card className="border-[var(--color-danger)]/40 bg-[var(--color-danger)]/5">

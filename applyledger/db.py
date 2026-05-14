@@ -314,3 +314,124 @@ def add_human_review(
         ),
     )
 
+
+def merge_application_pair(conn: sqlite3.Connection, *, app_key_a: str, app_key_b: str) -> dict[str, str]:
+    """
+    Merge a `rejection` row into an `application_confirmation` row (same job, duplicate keys).
+    Reassigns `app_events` and `human_reviews` from the rejection row, updates the survivor to `rejection`
+    with merged fields, then deletes the rejection application row.
+    """
+    if app_key_a == app_key_b:
+        raise ValueError("Cannot merge an application with itself.")
+
+    conn.row_factory = sqlite3.Row
+    ra = conn.execute("SELECT * FROM applications WHERE app_key = ? LIMIT 1", (app_key_a,)).fetchone()
+    rb = conn.execute("SELECT * FROM applications WHERE app_key = ? LIMIT 1", (app_key_b,)).fetchone()
+    if ra is None or rb is None:
+        raise ValueError("One or both applications were not found.")
+
+    sa, sb = ra["status"], rb["status"]
+    if {sa, sb} != {"rejection", "application_confirmation"}:
+        raise ValueError("Merge requires exactly one rejection and one application_confirmation row.")
+
+    if sa == "application_confirmation":
+        conf, rej = ra, rb
+        conf_key, rej_key = app_key_a, app_key_b
+    else:
+        conf, rej = rb, ra
+        conf_key, rej_key = app_key_b, app_key_a
+
+    now = utcnow_iso()
+
+    def _s(v: Any) -> str:
+        return (str(v).strip() if v is not None else "") or ""
+
+    company = _s(conf["company"]) or _s(rej["company"]) or None
+    job_title = _s(conf["job_title"]) or _s(rej["job_title"]) or None
+    job_id = _s(conf["job_id"]) or _s(rej["job_id"]) or None
+
+    ads = [conf["applied_date"], rej["applied_date"]]
+    ads_n = [a for a in ads if a]
+    applied_merged = min(ads_n) if ads_n else conf["applied_date"] or rej["applied_date"]
+
+    luds = [conf["last_update_date"], rej["last_update_date"]]
+    luds_n = [x for x in luds if x]
+    last_update_merged = max(luds_n) if luds_n else conf["last_update_date"] or rej["last_update_date"]
+
+    uats = [conf["updated_at"], rej["updated_at"]]
+    prefer_rej_email = str(rej["updated_at"] or "") >= str(conf["updated_at"] or "")
+    if prefer_rej_email:
+        last_mid, last_raw = rej["last_email_message_id"], rej["last_email_date_raw"]
+    else:
+        last_mid, last_raw = conf["last_email_message_id"], conf["last_email_date_raw"]
+
+    notes_parts = [x for x in (_s(conf["notes"]), _s(rej["notes"])) if x]
+    merged_notes = " | ".join(notes_parts) if notes_parts else None
+
+    cc, cr = conf["confidence"], rej["confidence"]
+    if cc is None and cr is None:
+        merged_conf: Any = None
+    else:
+        merged_conf = max(float(cc or 0), float(cr or 0))
+
+    conn.execute("UPDATE app_events SET app_key = ? WHERE app_key = ?", (conf_key, rej_key))
+    try:
+        conn.execute("UPDATE human_reviews SET app_key = ? WHERE app_key = ?", (conf_key, rej_key))
+    except sqlite3.OperationalError:
+        pass
+
+    conn.execute(
+        """
+        UPDATE applications SET
+          company = ?,
+          job_title = ?,
+          job_id = ?,
+          applied_date = ?,
+          status = 'rejection',
+          last_update_date = ?,
+          last_email_message_id = ?,
+          last_email_date_raw = ?,
+          confidence = ?,
+          notes = ?,
+          updated_at = ?
+        WHERE app_key = ?;
+        """,
+        (
+            company,
+            job_title,
+            job_id,
+            applied_merged,
+            last_update_merged,
+            last_mid,
+            last_raw,
+            merged_conf,
+            merged_notes,
+            now,
+            conf_key,
+        ),
+    )
+
+    conn.execute(
+        """
+        INSERT INTO app_events (app_key, event_type, event_date, gmail_message_id, raw_json, created_at)
+        VALUES (?, ?, ?, NULL, ?, ?);
+        """,
+        (
+            conf_key,
+            "manual:merge",
+            now,
+            json.dumps(
+                {
+                    "merged_from_app_key": rej_key,
+                    "note": "Merged rejection application into this confirmation record.",
+                },
+                ensure_ascii=False,
+            ),
+            now,
+        ),
+    )
+
+    conn.execute("DELETE FROM applications WHERE app_key = ?", (rej_key,))
+
+    return {"kept_app_key": conf_key, "removed_app_key": rej_key}
+
