@@ -117,6 +117,23 @@ def is_message_processed(conn: sqlite3.Connection, gmail_message_id: str) -> boo
     return row is not None
 
 
+def fetch_processed_message_ids(conn: sqlite3.Connection, message_ids: list[str]) -> set[str]:
+    """Which of `message_ids` already appear in `processed_messages` (chunked IN query)."""
+    if not message_ids:
+        return set()
+    lim = 900
+    found: set[str] = set()
+    for off in range(0, len(message_ids), lim):
+        chunk = message_ids[off : off + lim]
+        ph = ",".join("?" * len(chunk))
+        rows = conn.execute(
+            f"SELECT gmail_message_id FROM processed_messages WHERE gmail_message_id IN ({ph})",
+            chunk,
+        ).fetchall()
+        found.update(str(r[0]) for r in rows)
+    return found
+
+
 def mark_message_processed(
     conn: sqlite3.Connection,
     gmail_message_id: str,

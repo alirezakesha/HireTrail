@@ -9,58 +9,19 @@ Batch Gmail + OpenAI sync — same flow as `gmail_batch.ipynb`:
 
 from __future__ import annotations
 
-import json
 import sqlite3
+from collections.abc import Callable
 from typing import Any, Optional
 
-from dateutil import parser as date_parser
 from googleapiclient.errors import HttpError
 from openai import OpenAI
 
 from applyledger import db
+from applyledger.batch_classify import classify_emails_batch_openai, normalize_date
 from applyledger.config import Settings
-from applyledger.extract import classify_email_with_openai, html_to_text, openai_chat_completion_kwargs
+from applyledger.extract import classify_email_with_openai, html_to_text
 from applyledger.gmail_client import extract_bodies as gmail_extract_bodies
 from applyledger.gmail_client import get_gmail_service, header
-
-JOB_EMAIL_BATCH_SYSTEM_PROMPT = """You are a precise information extraction system.
-
-The user message is JSON: {"emails": [ ... ]}. Each element has:
-- gmail_message_id: string (opaque; copy exactly into your output for that email)
-- from, subject, date, snippet, body: same meaning as in the single-email task (body may be truncated)
-
-For EVERY input email, produce one object in "results" with this shape:
-{
-  "gmail_message_id": string,
-  "is_job_related": boolean,
-  "category": "application_confirmation" | "rejection" | "follow_up" | "interview" | "offer" | "job_alert" | "newsletter" | "other",
-  "company": string | null,
-  "job_title": string | null,
-  "job_id": string | null,
-  "applied_date": string | null,
-  "event_date": string | null,
-  "confidence": number,
-  "reason": string,
-  "evidence": {"company": string | null, "job_title": string | null, "job_id": string | null},
-  "notes": string | null
-}
-
-Return ONLY valid JSON: {"results": [ ... ]}.
-Rules:
-- results MUST have the SAME LENGTH as input emails, and MUST be in the SAME ORDER.
-- gmail_message_id in each result MUST equal the corresponding input gmail_message_id.
-- Apply the same classification rules as for single emails (non-job mail, job alerts, etc.).
-"""
-
-
-def normalize_date(date_raw: Optional[str]) -> Optional[str]:
-    if not date_raw:
-        return None
-    try:
-        dt = date_parser.parse(date_raw)
-        return dt.isoformat()
-    except (ValueError, TypeError, OverflowError):
-        return None
 
 
 def fetch_recent_messages(service: Any, max_results: int, query: str | None) -> list[dict[str, Any]]:
@@ -115,67 +76,13 @@ def get_messages_full_batch(service: Any, message_ids: list[str], chunk_sz: int)
     return out
 
 
-def fetch_processed_message_ids(conn: sqlite3.Connection, message_ids: list[str]) -> set[str]:
-    if not message_ids:
-        return set()
-    lim = 900
-    found: set[str] = set()
-    for off in range(0, len(message_ids), lim):
-        chunk = message_ids[off : off + lim]
-        ph = ",".join("?" * len(chunk))
-        rows = conn.execute(
-            f"SELECT gmail_message_id FROM processed_messages WHERE gmail_message_id IN ({ph})",
-            chunk,
-        ).fetchall()
-        found.update(str(r[0]) for r in rows)
-    return found
-
-
-def classify_emails_batch_openai(
-    *,
-    client: OpenAI,
-    model: str,
-    batch: list[dict[str, Any]],
-) -> dict[str, dict[str, Any]]:
-    """One API call for len(batch) messages — same contract as `gmail_batch.ipynb`."""
-    if not batch:
-        return {}
-
-    completion_cap = min(8000, 500 + 180 * max(1, len(batch)))
-
-    resp = client.chat.completions.create(
-        model=model,
-        messages=[
-            {"role": "system", "content": JOB_EMAIL_BATCH_SYSTEM_PROMPT},
-            {"role": "user", "content": json.dumps({"emails": batch}, ensure_ascii=False)},
-        ],
-        response_format={"type": "json_object"},
-        **openai_chat_completion_kwargs(model, completion_cap=completion_cap),
-    )
-
-    content = json.loads(resp.choices[0].message.content or "{}")
-    results = content.get("results")
-    if not isinstance(results, list):
-        return {}
-
-    out: dict[str, dict[str, Any]] = {}
-    for item in results:
-        if not isinstance(item, dict):
-            continue
-        mid = item.get("gmail_message_id")
-        if not mid:
-            continue
-        extracted = {k: v for k, v in item.items() if k != "gmail_message_id"}
-        out[str(mid)] = extracted
-    return out
-
-
 def run_process_inbox_batch(
     *,
     settings: Settings,
     query: str,
     max_results: int,
     max_body_chars: int,
+    progress_callback: Optional[Callable[[dict[str, Any]], None]] = None,
 ) -> dict[str, int]:
     """Port of `process_inbox_to_db_batch` from `gmail_batch.ipynb`."""
     db.init_db(settings.db_path)
@@ -191,19 +98,43 @@ def run_process_inbox_batch(
     msgs = fetch_recent_messages(service, max_results, query)
     if not msgs:
         conn.close()
-        return {"found": 0, "skipped": 0, "processed_now": 0, "stored_app_records": 0}
+        stats = {"found": 0, "skipped": 0, "processed_now": 0, "stored_app_records": 0}
+        if progress_callback:
+            progress_callback({"phase": "complete", "stats": stats})
+        return stats
 
     all_ids = [str(m["id"]) for m in msgs if m.get("id")]
     found = len(all_ids)
 
-    already = fetch_processed_message_ids(conn, all_ids)
+    already = db.fetch_processed_message_ids(conn, all_ids)
     skipped = len(already)
     pending_ids = [mid for mid in all_ids if mid not in already]
 
     if not pending_ids:
         conn.close()
-        return {"found": found, "skipped": skipped, "processed_now": 0, "stored_app_records": 0}
+        stats = {"found": found, "skipped": skipped, "processed_now": 0, "stored_app_records": 0}
+        if progress_callback:
+            progress_callback({"phase": "complete", "stats": stats})
+        return stats
 
+    n_pending = len(pending_ids)
+    steps_total = max(1, 2 * n_pending)
+
+    def _emit(step: int, phase: str, **extra: Any) -> None:
+        if progress_callback:
+            payload: dict[str, Any] = {
+                "phase": phase,
+                "step": step,
+                "steps_total": steps_total,
+                "found": found,
+                "skipped": skipped,
+                "pending": n_pending,
+            }
+            payload.update(extra)
+            progress_callback(payload)
+
+    step = 0
+    _emit(step, "listed")
     full_by_id = get_messages_full_batch(
         service,
         pending_ids,
@@ -238,6 +169,8 @@ def run_process_inbox_batch(
                 "body_text": body_text,
             }
         )
+        step += 1
+        _emit(step, "fetch", message_id=mid)
 
     bs = max(1, settings.openai_classify_batch_size)
     processed_now = 0
@@ -274,13 +207,16 @@ def run_process_inbox_batch(
                         body_text=row["body_text"],
                         max_body_chars=body_slice,
                     )
-
+                # print(extracted)
+                # print("--------------------------------")
                 db.mark_message_processed(
                     conn,
                     mid,
                     extracted,
                     model=settings.openai_model,
                 )
+
+
                 processed_now += 1
 
                 full = row["full"]
@@ -305,12 +241,23 @@ def run_process_inbox_batch(
                     stored_app_records += 1
 
                 conn.commit()
+                step += 1
+                _emit(
+                    step,
+                    "classify",
+                    processed_messages=processed_now,
+                    stored_app_records=stored_app_records,
+                    last_message_id=mid,
+                )
     finally:
         conn.close()
 
-    return {
+    stats = {
         "found": found,
         "skipped": skipped,
         "processed_now": processed_now,
         "stored_app_records": stored_app_records,
     }
+    if progress_callback:
+        progress_callback({"phase": "complete", "stats": stats})
+    return stats

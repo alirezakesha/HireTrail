@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
+from typing import Any, Callable, Optional
 
 from applyledger.config import Settings
 from applyledger.batch_sync import run_process_inbox_batch
@@ -15,12 +15,14 @@ def run_sync(
     query: str,
     max_results: int,
     max_body_chars: int,
+    progress_callback: Optional[Callable[[dict[str, Any]], None]] = None,
 ) -> dict[str, int]:
     return run_process_inbox_batch(
         settings=settings,
         query=query,
         max_results=max_results,
         max_body_chars=max_body_chars,
+        progress_callback=progress_callback,
     )
 
 

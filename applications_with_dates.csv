@@ -10,7 +10,7 @@ Homebase,,2026-03-09,,application_confirmation
 Autodesk,Senior Machine Learning Developer,2026-03-09,2026-03-14,rejection
 Andiamo,Data Scientist - Global Tech Leader,2026-03-09,,application_confirmation
 SentiLink,,2026-03-09,,application_confirmation
-MaintainX,,2026-03-09,,application_confirmation
+MaintainX,Senior AI Platform Engineer,2026-03-09,2026-03-26,rejection
 Prophix,Senior AI Engineer (Agentic AI),2026-03-09,,application_confirmation
 Prophix,Senior AI Engineer (Agentic AI),2026-03-09,,application_confirmation
 Uber,Senior Optimization Engineer,2026-03-09,2026-03-13,rejection
@@ -50,7 +50,7 @@ Spotify,Data Scientist - Platform Mission,2026-03-30,,application_confirmation
 TELUS,Data Scientist,2026-03-30,,application_confirmation
 RBC,Senior Researcher,2026-03-30,,application_confirmation
 Holt Renfrew,AI Engineer,2026-03-30,2026-04-18,rejection
-Canadian Tire Group of Companies,Data Scientist,2026-03-30,,application_confirmation
+Canadian Tire Group of Companies,Data Scientist,2026-03-30,2026-05-11,rejection
 Canadian Tire Group of Companies,"Data Scientist, Statistics and Modelling - 2 Year Contract",2026-03-30,,application_confirmation
 Kinaxis,"Architect, Machine Learning",2026-03-30,,application_confirmation
 RBC,ML Data Engineer,2026-03-31,,application_confirmation
@@ -59,10 +59,9 @@ Sanofi,Senior Scientist - Agentic AI Systems - Vaccines,2026-04-01,,application_
 Sanofi,Data Scientist,2026-04-01,,application_confirmation
 Ample Insight Inc.,Data Scientist,2026-04-02,,application_confirmation
 ,Data Scientist,2026-04-02,,application_confirmation
-Valsoft Corporation,Forward Deployed Engineer (AI),2026-04-02,,application_confirmation
+Valsoft Corporation,Forward Deployed Engineer (AI),2026-04-02,2026-04-21,rejection
 RBC,Senior Data Scientist,2026-04-02,,application_confirmation
 AstraZeneca,"R-239748 Fundamental AI Research Scientist - Toronto, Ontario",2026-04-02,2026-04-30,rejection
-AstraZeneca,Fundamental AI Research Scientist,2026-04-02,,application_confirmation
 Caylent,Machine Learning Architect,2026-04-02,2026-04-28,rejection
 Vanguard,AI/ML Engineer,2026-04-02,2026-05-04,rejection
 Tucows Inc.,,2026-04-06,,application_confirmation
@@ -101,7 +100,7 @@ Veeva,,2026-04-14,,application_confirmation
 Verily,Staff AI Researcher (Foundation Models),2026-04-15,,application_confirmation
 Wealthsimple,"Staff Data Scientist, Fraud",2026-04-16,2026-04-17,rejection
 WPP Media,,2026-04-16,,application_confirmation
-Thomson Reuters,Applied Scientist,2026-04-20,,application_confirmation
+Thomson Reuters,Applied Scientist,2026-04-20,2026-05-14,rejection
 Achievers,Data Scientist,2026-04-20,2026-04-21,rejection
 RBC,Senior Machine Learning Research Engineer,2026-04-20,,application_confirmation
 Nucs AI,Machine Learning Scientist,2026-04-20,,application_confirmation
@@ -130,7 +129,7 @@ ServiceTitan,Senior Data Scientist,2026-04-27,,application_confirmation
 BMO,"Senior Analyst, Data Sciences",2026-04-27,,application_confirmation
 TD,"Senior Applied Machine Learning Scientist, Predictive AI",2026-04-28,,application_confirmation
 Kroll,Senior Data Scientist,2026-04-28,2026-05-06,rejection
-Alpaca Markets,Senior Data Scientist,2026-04-28,,application_confirmation
+Alpaca Markets,Senior Data Scientist,2026-04-28,2026-05-12,rejection
 Clio,,2026-04-28,,application_confirmation
 RBC,Senior Data Scientist - AI,2026-04-28,,application_confirmation
 Relay,Senior Data Scientist,2026-04-28,2026-05-01,rejection
@@ -154,7 +153,7 @@ Questrade Financial Group,Principal Data Scientist,2026-04-30,,application_confi
 "Huawei Technologies Canada Co., Ltd.",Researcher – AI/ML,2026-04-30,,application_confirmation
 "Huawei Technologies Canada Co., Ltd.",Intern Strategic Researcher - Efficient AI Computing,2026-04-30,,application_confirmation
 "Huawei Technologies Canada Co., Ltd.",Intern Strategic Researcher - LLM,2026-04-30,,application_confirmation
-"Huawei Technologies Canada Co., Ltd.",PhD Intern - AI Efficiency Researcher,2026-04-30,,application_confirmation
+"Huawei Technologies Canada Co., Ltd.",PhD Intern - AI Efficiency Researcher,2026-04-30,2026-05-01,rejection
 CIBC,Senior Machine Learning Engineer,2026-05-02,,application_confirmation
 ,Machine Learning Bioinformatics Engineer,2026-05-04,,application_confirmation
 Electronic Arts,Data Scientist - Mobile Growth,2026-05-04,,application_confirmation
@@ -171,11 +170,16 @@ SearchLabs,Lead AI Engineer,2026-05-13,,application_confirmation
 TD,Senior Machine Learning Engineer ( R_1478728 ),2026-05-13,,application_confirmation
 Coalition,Applied Scientist II,2026-05-13,,application_confirmation
 ,Agentic AI Researcher,2026-05-13,,application_confirmation
+Robertson & Company Ltd.,Senior Research Engineer,2026-05-14,,application_confirmation
+Workerbee,Machine Learning Developer,2026-05-14,,application_confirmation
+Shakepay,,2026-05-14,,application_confirmation
+TD,Applied Machine Learning Scientist II,2026-05-14,,application_confirmation
+Xanadu Quantum Technologies,Data Scientist - Experimental Statistics,2026-05-14,,application_confirmation
+Blue J,Senior Machine Learning Engineer,2026-05-14,,application_confirmation
+Microsoft,Senior Applied Scientist,,2026-05-14,rejection
 Canadian Tire Corporation,Senior Data Scientist,,,interview
 Huawei Canada,Intern Researcher - AI Agent,,,interview
 Intuition Machines,Senior/Lead ML Applied Scientist,,2026-05-09,rejection
-Canadian Tire Corporation,Data Scientist,,2026-05-11,rejection
-Alpaca,Senior Data Scientist,,2026-05-12,rejection
 Electronic Arts,Data Scientist,,,interview
 Signature IT World Inc,Artificial Intelligence Engineer,,2026-03-07,rejection
 Vanguard,"Data Scientist, Specialist",,2026-03-09,rejection
@@ -200,7 +204,6 @@ Aviva,"Data Science Manager, GIS",,2026-03-23,rejection
 Autodesk,PhD Intern - AI Researcher for CAD (B-Rep) Generation,,2026-03-25,rejection
 Intact Financial Corporation,AI Developer Senior,,2026-03-26,rejection
 eBay,Data Science - Analyst 4,,2026-03-26,rejection
-MaintainX,Senior AI Platform Engineer,,2026-03-26,rejection
 Manulife/John Hancock,Machine Learning Engineer,,2026-03-27,rejection
 Aviva,Senior Data Scientist,,2026-03-27,rejection
 EY,AI and Data - Data Architect - Healthcare,,2026-03-31,rejection
@@ -225,7 +228,6 @@ Sanofi,Senior Scientist - Agentic AI Systems - Vaccines,,2026-04-18,rejection
 eBay,Applied Researcher 3,,2026-04-18,rejection
 Huawei Canada,Researcher – AI/ML,,2026-04-20,rejection
 Veeva Systems,,,2026-04-20,rejection
-Valsoft,Forward Deployed Engineer (AI),,2026-04-21,rejection
 ,,,,interview
 Thomson Reuters,Senior Research Engineer,,2026-04-24,rejection
 Adaptive ML,,,2026-04-27,rejection
@@ -233,7 +235,6 @@ Wave,Applied AI Scientist - LLMs & Voice,,2026-04-27,rejection
 ServiceTitan,Senior Data Scientist,,2026-04-30,rejection
 M Science,Data Scientist,,2026-04-30,rejection
 Huawei,,,,interview
-Huawei Canada,PhD Intern - AI Efficiency Researcher,,2026-05-01,rejection
 Clio,Senior Machine Learning Engineer,,2026-05-03,rejection
 BDO Canada LLP,AI Engineer,,2026-05-03,rejection
 Cantire,Senior Data Scientist,,,interview

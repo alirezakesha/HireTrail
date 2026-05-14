@@ -97,9 +97,8 @@ def classify_email_with_openai(
             {"role": "user", "content": json.dumps(user_content, ensure_ascii=False)},
         ],
         response_format={"type": "json_object"},
-        **openai_chat_completion_kwargs(model, completion_cap=250),
     )
-
+    # print(resp)
     content = resp.choices[0].message.content or "{}"
     return json.loads(content)
 

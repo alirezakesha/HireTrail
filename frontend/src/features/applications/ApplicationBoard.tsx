@@ -114,7 +114,7 @@ export function ApplicationBoard({ rows, loading, error }: Props) {
       apiPost<{ kept_app_key: string; removed_app_key: string }>('/api/applications/merge', payload),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['applications'] })
-      void qc.invalidateQueries({ queryKey: ['timeline'] })
+      void qc.invalidateQueries({ queryKey: ['timeline'], refetchType: 'all' })
     },
   })
 
@@ -134,7 +134,7 @@ export function ApplicationBoard({ rows, loading, error }: Props) {
         return next
       })
       void qc.invalidateQueries({ queryKey: ['applications'] })
-      void qc.invalidateQueries({ queryKey: ['timeline'] })
+      void qc.invalidateQueries({ queryKey: ['timeline'], refetchType: 'all' })
     },
   })
 

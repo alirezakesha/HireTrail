@@ -10,15 +10,19 @@ Then `npm run dev` in `frontend/` (Vite proxies `/api` to this server).
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import sqlite3
+import threading
 from pathlib import Path
+from queue import SimpleQueue
 from typing import Any, Optional
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
+from starlette.responses import StreamingResponse
 
 from applyledger import db
 from applyledger.config import load_settings
@@ -387,20 +391,54 @@ def api_auth_gmail() -> dict[str, str]:
 
 
 @app.post("/api/sync")
-def api_sync(body: SyncBody) -> dict[str, int]:
+async def api_sync(body: SyncBody) -> StreamingResponse:
+    """Runs Gmail sync in a worker thread and streams NDJSON progress lines (one JSON object per line)."""
     s, err = _settings_or_error()
     if err or not s:
         raise HTTPException(status_code=503, detail=err or "Settings not loaded")
     cred_err = ensure_credentials_files(s)
     if cred_err:
         raise HTTPException(status_code=400, detail=cred_err)
-    stats = run_sync(
-        settings=s,
-        query=body.query,
-        max_results=max(10, min(body.max_results, 500)),
-        max_body_chars=max(500, min(body.max_body_chars, 8000)),
+
+    max_results = max(10, min(body.max_results, 500))
+    max_body_chars = max(500, min(body.max_body_chars, 8000))
+    q: SimpleQueue[str | None] = SimpleQueue()
+
+    def worker() -> None:
+        try:
+
+            def on_progress(payload: dict[str, Any]) -> None:
+                q.put(json.dumps(payload, ensure_ascii=False) + "\n")
+
+            run_sync(
+                settings=s,
+                query=body.query,
+                max_results=max_results,
+                max_body_chars=max_body_chars,
+                progress_callback=on_progress,
+            )
+        except Exception as e:  # noqa: BLE001
+            q.put(json.dumps({"phase": "error", "message": str(e)}, ensure_ascii=False) + "\n")
+        finally:
+            q.put(None)
+
+    threading.Thread(target=worker, daemon=True).start()
+
+    async def ndjson_iter():
+        while True:
+            line = await asyncio.to_thread(q.get)
+            if line is None:
+                break
+            yield line.encode("utf-8")
+
+    return StreamingResponse(
+        ndjson_iter(),
+        media_type="application/x-ndjson",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
     )
-    return stats
 
 
 @app.get("/health")

@@ -43,6 +43,23 @@ export type SyncStats = {
   stored_app_records: number
 }
 
+/** One NDJSON line from `POST /api/sync` while the worker runs. */
+export type SyncStreamLine =
+  | {
+      phase: 'listed' | 'fetch' | 'classify'
+      step: number
+      steps_total: number
+      found: number
+      skipped: number
+      pending: number
+      message_id?: string
+      processed_messages?: number
+      stored_app_records?: number
+      last_message_id?: string
+    }
+  | { phase: 'complete'; stats: SyncStats }
+  | { phase: 'error'; message: string }
+
 export type EmbeddingMergeAppSummary = {
   app_key: string
   company: string | null
@@ -125,4 +142,71 @@ export async function apiPost<T>(
   )
   if (!r.ok) throw new Error(await parseError(r))
   return r.json() as Promise<T>
+}
+
+const SYNC_STREAM_MS = 600_000
+
+/**
+ * `POST /api/sync` streams NDJSON (one JSON object per line). Invokes `onProgress` for each line;
+ * resolves with final `SyncStats` from the `complete` event.
+ */
+export async function apiStreamSync(
+  body: { query: string; max_results: number; max_body_chars: number },
+  onProgress: (line: SyncStreamLine) => void,
+  requestMs: number = SYNC_STREAM_MS,
+): Promise<SyncStats> {
+  const controller = new AbortController()
+  const id = setTimeout(() => controller.abort(), requestMs)
+  let finalStats: SyncStats | null = null
+  try {
+    const res = await fetch('/api/sync', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    })
+    if (!res.ok) throw new Error(await parseError(res))
+    const reader = res.body?.getReader()
+    if (!reader) throw new Error('No response body from sync endpoint.')
+    const decoder = new TextDecoder()
+    let buffer = ''
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      const parts = buffer.split('\n')
+      buffer = parts.pop() ?? ''
+      for (const raw of parts) {
+        const line = raw.trim()
+        if (!line) continue
+        let parsed: SyncStreamLine
+        try {
+          parsed = JSON.parse(line) as SyncStreamLine
+        } catch {
+          continue
+        }
+        onProgress(parsed)
+        if (parsed.phase === 'complete') finalStats = parsed.stats
+        if (parsed.phase === 'error') throw new Error(parsed.message || 'Sync failed')
+      }
+    }
+    const tail = buffer.trim()
+    if (tail) {
+      const parsed = JSON.parse(tail) as SyncStreamLine
+      onProgress(parsed)
+      if (parsed.phase === 'complete') finalStats = parsed.stats
+      if (parsed.phase === 'error') throw new Error(parsed.message || 'Sync failed')
+    }
+    if (!finalStats) throw new Error('Sync stream ended without completion stats.')
+    return finalStats
+  } catch (e) {
+    if (e instanceof DOMException && e.name === 'AbortError') {
+      throw new Error(
+        `Sync timed out after ${Math.round(requestMs / 1000)}s. Ensure the API is running on port 8000.`,
+      )
+    }
+    throw e
+  } finally {
+    clearTimeout(id)
+  }
 }

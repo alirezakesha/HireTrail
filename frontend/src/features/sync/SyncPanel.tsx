@@ -1,11 +1,34 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
-import { apiPost, type SyncStats } from '../../api'
+import { apiPost, apiStreamSync, type SyncStreamLine } from '../../api'
 import { Card } from '../../components/ui/Card'
 import { DEFAULT_GMAIL_QUERY } from '../../constants/statuses'
 
 type Props = {
-  onSynced: () => void
+  onSynced: () => void | Promise<void>
+}
+
+function phaseLabel(phase: string | null): string {
+  switch (phase) {
+    case 'listed':
+      return 'Scanning inbox…'
+    case 'fetch':
+      return 'Loading message bodies from Gmail…'
+    case 'classify':
+      return 'Classifying with OpenAI…'
+    case 'complete':
+      return 'Done'
+    default:
+      return 'Connecting…'
+  }
+}
+
+function progressFromLine(line: SyncStreamLine): number {
+  if (line.phase === 'complete') return 100
+  if (line.phase === 'error') return 0
+  const { step, steps_total } = line
+  if (!steps_total) return 0
+  return Math.min(100, Math.round((100 * step) / steps_total))
 }
 
 export function SyncPanel({ onSynced }: Props) {
@@ -13,6 +36,8 @@ export function SyncPanel({ onSynced }: Props) {
   const [query, setQuery] = useState(DEFAULT_GMAIL_QUERY)
   const [maxResults, setMaxResults] = useState(200)
   const [maxBody, setMaxBody] = useState(3500)
+  const [syncProgress, setSyncProgress] = useState(0)
+  const [syncPhase, setSyncPhase] = useState<string | null>(null)
 
   const authM = useMutation({
     mutationFn: () => apiPost<{ gmail_token_file: string; message: string }>('/api/auth/gmail'),
@@ -23,16 +48,24 @@ export function SyncPanel({ onSynced }: Props) {
 
   const syncM = useMutation({
     mutationFn: () =>
-      apiPost<SyncStats>(
-        '/api/sync',
+      apiStreamSync(
         {
           query,
           max_results: maxResults,
           max_body_chars: maxBody,
         },
-        600_000,
+        (line) => {
+          setSyncPhase(line.phase === 'error' ? null : line.phase)
+          setSyncProgress(progressFromLine(line))
+        },
       ),
-    onSuccess: () => onSynced(),
+    onSuccess: async () => {
+      await onSynced()
+    },
+    onSettled: () => {
+      setSyncProgress(0)
+      setSyncPhase(null)
+    },
   })
 
   return (
@@ -63,7 +96,10 @@ export function SyncPanel({ onSynced }: Props) {
       <Card>
         <h2 className="font-display text-lg font-semibold text-[var(--color-ink)]">Sync new messages</h2>
         <p className="mt-3 text-sm text-[var(--color-muted)]">
-          Only unseen Gmail IDs are classified; reruns skip processed message IDs.
+          New Gmail message IDs are classified; already-processed IDs are skipped. When sync finishes, the Applications
+          and Timeline lists refresh in the background (read mail in inbox still matches <span className="font-mono">in:inbox</span>{' '}
+          unless your query restricts it). Progress updates stream from the server while each message is fetched and
+          classified.
         </p>
         <label className="mt-6 block text-xs font-medium uppercase tracking-wide text-[var(--color-muted)]">
           Gmail query
@@ -103,6 +139,20 @@ export function SyncPanel({ onSynced }: Props) {
             />
           </div>
         </div>
+        {syncM.isPending && (
+          <div className="mt-6 space-y-2">
+            <div className="flex justify-between text-xs text-[var(--color-muted)]">
+              <span>{phaseLabel(syncPhase)}</span>
+              <span className="tabular-nums">{syncProgress}%</span>
+            </div>
+            <div className="h-2 w-full overflow-hidden rounded-full bg-black/35">
+              <div
+                className="h-full rounded-full bg-[var(--color-accent)] transition-[width] duration-300 ease-out"
+                style={{ width: `${syncProgress}%` }}
+              />
+            </div>
+          </div>
+        )}
         <button
           type="button"
           disabled={syncM.isPending}

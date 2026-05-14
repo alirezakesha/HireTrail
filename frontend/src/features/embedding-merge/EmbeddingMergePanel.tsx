@@ -32,7 +32,7 @@ export function EmbeddingMergePanel() {
       apiPost<{ kept_app_key: string; removed_app_key: string }>('/api/applications/merge', p),
     onSuccess: async () => {
       await qc.invalidateQueries({ queryKey: ['applications'] })
-      await qc.invalidateQueries({ queryKey: ['timeline'] })
+      await qc.invalidateQueries({ queryKey: ['timeline'], refetchType: 'all' })
       try {
         await analyzeM.mutateAsync()
       } catch {

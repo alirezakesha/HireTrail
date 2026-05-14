@@ -16,10 +16,13 @@ export function MainApp({ onSignOut }: Props) {
   const [tab, setTab] = useState<MainTab>('Applications')
   const qc = useQueryClient()
 
+  /** After sync, refetch list data even when those tabs are not focused (queries would otherwise be inactive). */
   const invalidateData = useCallback(() => {
-    void qc.invalidateQueries({ queryKey: ['applications'] })
-    void qc.invalidateQueries({ queryKey: ['timeline'] })
-    void qc.invalidateQueries({ queryKey: ['meta'] })
+    return Promise.all([
+      qc.invalidateQueries({ queryKey: ['applications'] }),
+      qc.invalidateQueries({ queryKey: ['timeline'], refetchType: 'all' }),
+      qc.invalidateQueries({ queryKey: ['meta'] }),
+    ]).then(() => undefined)
   }, [qc])
 
   const onTimelineSaved = useCallback(() => {
@@ -29,7 +32,8 @@ export function MainApp({ onSignOut }: Props) {
   const appsQ = useQuery({
     queryKey: ['applications'],
     queryFn: () => apiGet<ApplicationRow[]>('/api/applications'),
-    enabled: tab === 'Applications',
+    /** Keep this observer active on every tab so post-sync invalidation refetches while you stay on Sync. */
+    enabled: true,
   })
 
   const timelineQ = useQuery({

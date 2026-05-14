@@ -148,3 +148,12 @@ Do **not** commit:
 
 They are ignored by `.gitignore` in this project.
 
+how to run the server: 
+```bash
+uvicorn applyledger.api_server:app --reload --host 127.0.0.1 --port 8000
+```
+
+how to run the frontend
+```bash 
+npm run dev
+```
