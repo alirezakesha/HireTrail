@@ -207,8 +207,7 @@ def run_process_inbox_batch(
                         body_text=row["body_text"],
                         max_body_chars=body_slice,
                     )
-                # print(extracted)
-                # print("--------------------------------")
+
                 db.mark_message_processed(
                     conn,
                     mid,

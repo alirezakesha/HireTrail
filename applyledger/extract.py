@@ -98,7 +98,7 @@ def classify_email_with_openai(
         ],
         response_format={"type": "json_object"},
     )
-    # print(resp)
+    
     content = resp.choices[0].message.content or "{}"
     return json.loads(content)
 
