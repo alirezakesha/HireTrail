@@ -90,6 +90,80 @@ def test_upsert_application_from_extraction_fills_emails_table(conn: sqlite3.Con
     assert app["status"] == "application_confirmation"
 
 
+def test_merge_application_pair_two_interviews(conn: sqlite3.Connection) -> None:
+    """Any two distinct rows can merge; survivor and fields follow choices."""
+    ex_a = {
+        "category": "interview",
+        "company": "Acme",
+        "job_title": "Engineer",
+        "job_id": None,
+        "confidence": 0.7,
+        "notes": "short",
+    }
+    ex_b = {
+        "category": "interview",
+        "company": "Acme Corp",
+        "job_title": "Senior Engineer",
+        "job_id": "R-99",
+        "confidence": 0.9,
+        "notes": "longer note here",
+    }
+    db.upsert_application_from_extraction(
+        conn,
+        gmail_message_id="g-a",
+        gmail_thread_id=None,
+        internal_date_ms=None,
+        from_addr="a@x.com",
+        to_addr=None,
+        subject="s",
+        date_raw=None,
+        snippet="",
+        body_text="",
+        extracted=ex_a,
+    )
+    db.upsert_application_from_extraction(
+        conn,
+        gmail_message_id="g-b",
+        gmail_thread_id=None,
+        internal_date_ms=None,
+        from_addr="b@x.com",
+        to_addr=None,
+        subject="s2",
+        date_raw=None,
+        snippet="",
+        body_text="",
+        extracted=ex_b,
+    )
+    conn.commit()
+    ka = conn.execute("SELECT app_key FROM applications WHERE last_email_message_id = 'g-a'").fetchone()["app_key"]
+    kb = conn.execute("SELECT app_key FROM applications WHERE last_email_message_id = 'g-b'").fetchone()["app_key"]
+
+    result = db.merge_application_pair(
+        conn,
+        app_key_a=ka,
+        app_key_b=kb,
+        kept_app_key=ka,
+        field_choices={
+            "company": "b",
+            "job_title": "b",
+            "job_id": "b",
+            "status": "a",
+            "notes": "b",
+            "confidence": "b",
+            "applied_date": "a",
+            "last_update_date": "a",
+            "last_email": "a",
+        },
+    )
+    conn.commit()
+    assert result["kept_app_key"] == ka
+    assert result["removed_app_key"] == kb
+    row = conn.execute("SELECT * FROM applications WHERE app_key = ?", (ka,)).fetchone()
+    assert row["company"] == "Acme Corp"
+    assert row["job_id"] == "R-99"
+    assert conn.execute("SELECT 1 FROM applications WHERE app_key = ?", (kb,)).fetchone() is None
+
+
 def test_fetch_processed_message_ids_subset(conn: sqlite3.Connection) -> None:
     db.mark_message_processed(conn, "seen-1", {"category": "other"}, model="m")
     conn.commit()

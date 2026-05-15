@@ -101,6 +101,10 @@ def api_applications() -> list[dict[str, Any]]:
 class MergeApplicationsBody(BaseModel):
     app_key_a: str
     app_key_b: str
+    """Which row survives; must be app_key_a or app_key_b. Omitted = server default."""
+    kept_app_key: str | None = None
+    """Per-field pick: ``a`` or ``b`` (relative to app_key_a / app_key_b). Keys: company, job_title, …"""
+    field_choices: dict[str, str] | None = None
 
 
 class EmbeddingMergeSuggestionsBody(BaseModel):
@@ -131,7 +135,13 @@ def api_merge_applications(body: MergeApplicationsBody) -> dict[str, str]:
     conn = _conn()
     try:
         try:
-            result = db.merge_application_pair(conn, app_key_a=body.app_key_a.strip(), app_key_b=body.app_key_b.strip())
+            result = db.merge_application_pair(
+                conn,
+                app_key_a=body.app_key_a.strip(),
+                app_key_b=body.app_key_b.strip(),
+                kept_app_key=body.kept_app_key.strip() if body.kept_app_key else None,
+                field_choices=body.field_choices,
+            )
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e)) from e
         conn.commit()

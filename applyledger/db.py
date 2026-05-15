@@ -332,11 +332,101 @@ def add_human_review(
     )
 
 
-def merge_application_pair(conn: sqlite3.Connection, *, app_key_a: str, app_key_b: str) -> dict[str, str]:
+MERGE_FIELD_KEYS = (
+    "company",
+    "job_title",
+    "job_id",
+    "status",
+    "applied_date",
+    "last_update_date",
+    "last_email",
+    "confidence",
+    "notes",
+)
+
+_STATUS_RANK = {
+    "rejection": 5,
+    "interview": 4,
+    "application_confirmation": 3,
+    "follow_up": 2,
+    "offer": 2,
+    "other": 1,
+}
+
+
+def _row_text_score(v: Any) -> int:
+    if v is None:
+        return 0
+    s = str(v).strip()
+    return len(s) if s else 0
+
+
+def _pick_richer_text(va: Any, vb: Any, side_a: str, side_b: str) -> str:
+    return side_a if _row_text_score(va) >= _row_text_score(vb) else side_b
+
+
+def _default_kept_app_key(ra: sqlite3.Row, rb: sqlite3.Row, app_key_a: str, app_key_b: str) -> str:
+    if ra["status"] == "application_confirmation" and rb["status"] != "application_confirmation":
+        return app_key_a
+    if rb["status"] == "application_confirmation" and ra["status"] != "application_confirmation":
+        return app_key_b
+    score_a = sum(_row_text_score(ra[f]) for f in ("company", "job_title", "job_id", "notes"))
+    score_b = sum(_row_text_score(rb[f]) for f in ("company", "job_title", "job_id", "notes"))
+    if score_a != score_b:
+        return app_key_a if score_a > score_b else app_key_b
+    return app_key_a if str(ra["updated_at"] or "") >= str(rb["updated_at"] or "") else app_key_b
+
+
+def default_merge_field_choices(ra: sqlite3.Row, rb: sqlite3.Row) -> dict[str, str]:
+    """Suggest per-field side (`a` or `b`) — prefer the more complete / sensible value."""
+    choices: dict[str, str] = {}
+    for field in ("company", "job_title", "job_id", "notes"):
+        choices[field] = _pick_richer_text(ra[field], rb[field], "a", "b")
+
+    ra_rank = _STATUS_RANK.get(str(ra["status"] or ""), 0)
+    rb_rank = _STATUS_RANK.get(str(rb["status"] or ""), 0)
+    choices["status"] = "a" if ra_rank >= rb_rank else "b"
+
+    ads = [("a", ra["applied_date"]), ("b", rb["applied_date"])]
+    ads_n = [(s, d) for s, d in ads if d]
+    if ads_n:
+        choices["applied_date"] = min(ads_n, key=lambda x: str(x[1]))[0]
+    else:
+        choices["applied_date"] = _pick_richer_text(ra["applied_date"], rb["applied_date"], "a", "b")
+
+    luds = [("a", ra["last_update_date"]), ("b", rb["last_update_date"])]
+    luds_n = [(s, d) for s, d in luds if d]
+    if luds_n:
+        choices["last_update_date"] = max(luds_n, key=lambda x: str(x[1]))[0]
+    else:
+        choices["last_update_date"] = _pick_richer_text(ra["last_update_date"], rb["last_update_date"], "a", "b")
+
+    choices["last_email"] = "a" if str(ra["updated_at"] or "") >= str(rb["updated_at"] or "") else "b"
+
+    ca, cb = ra["confidence"], rb["confidence"]
+    if ca is None and cb is None:
+        choices["confidence"] = "a"
+    elif cb is None:
+        choices["confidence"] = "a"
+    elif ca is None:
+        choices["confidence"] = "b"
+    else:
+        choices["confidence"] = "a" if float(ca) >= float(cb) else "b"
+
+    return choices
+
+
+def merge_application_pair(
+    conn: sqlite3.Connection,
+    *,
+    app_key_a: str,
+    app_key_b: str,
+    kept_app_key: str | None = None,
+    field_choices: dict[str, str] | None = None,
+) -> dict[str, str]:
     """
-    Merge a `rejection` row into an `application_confirmation` row (same job, duplicate keys).
-    Reassigns `app_events` and `human_reviews` from the rejection row, updates the survivor to `rejection`
-    with merged fields, then deletes the rejection application row.
+    Merge two application rows into one. The removed row's events move to the survivor.
+    `field_choices` maps field names to ``a`` or ``b`` (relative to app_key_a / app_key_b).
     """
     if app_key_a == app_key_b:
         raise ValueError("Cannot merge an application with itself.")
@@ -347,53 +437,43 @@ def merge_application_pair(conn: sqlite3.Connection, *, app_key_a: str, app_key_
     if ra is None or rb is None:
         raise ValueError("One or both applications were not found.")
 
-    sa, sb = ra["status"], rb["status"]
-    if {sa, sb} != {"rejection", "application_confirmation"}:
-        raise ValueError("Merge requires exactly one rejection and one application_confirmation row.")
+    kept = kept_app_key or _default_kept_app_key(ra, rb, app_key_a, app_key_b)
+    if kept not in (app_key_a, app_key_b):
+        raise ValueError("kept_app_key must be app_key_a or app_key_b.")
+    removed = app_key_b if kept == app_key_a else app_key_a
 
-    if sa == "application_confirmation":
-        conf, rej = ra, rb
-        conf_key, rej_key = app_key_a, app_key_b
-    else:
-        conf, rej = rb, ra
-        conf_key, rej_key = app_key_b, app_key_a
+    choices = default_merge_field_choices(ra, rb)
+    if field_choices:
+        for k, v in field_choices.items():
+            if k in MERGE_FIELD_KEYS and v in ("a", "b"):
+                choices[k] = v
+
+    def _side(field: str) -> sqlite3.Row:
+        return ra if choices.get(field, "a") == "a" else rb
+
+    def _s(v: Any) -> str | None:
+        if v is None:
+            return None
+        t = str(v).strip()
+        return t or None
+
+    company = _s(_side("company")["company"])
+    job_title = _s(_side("job_title")["job_title"])
+    job_id = _s(_side("job_id")["job_id"])
+    status = _s(_side("status")["status"]) or "other"
+    applied_date = _side("applied_date")["applied_date"]
+    last_update_date = _side("last_update_date")["last_update_date"]
+    email_row = _side("last_email")
+    last_mid = email_row["last_email_message_id"]
+    last_raw = email_row["last_email_date_raw"]
+    confidence = _side("confidence")["confidence"]
+    notes = _s(_side("notes")["notes"])
 
     now = utcnow_iso()
 
-    def _s(v: Any) -> str:
-        return (str(v).strip() if v is not None else "") or ""
-
-    company = _s(conf["company"]) or _s(rej["company"]) or None
-    job_title = _s(conf["job_title"]) or _s(rej["job_title"]) or None
-    job_id = _s(conf["job_id"]) or _s(rej["job_id"]) or None
-
-    ads = [conf["applied_date"], rej["applied_date"]]
-    ads_n = [a for a in ads if a]
-    applied_merged = min(ads_n) if ads_n else conf["applied_date"] or rej["applied_date"]
-
-    luds = [conf["last_update_date"], rej["last_update_date"]]
-    luds_n = [x for x in luds if x]
-    last_update_merged = max(luds_n) if luds_n else conf["last_update_date"] or rej["last_update_date"]
-
-    uats = [conf["updated_at"], rej["updated_at"]]
-    prefer_rej_email = str(rej["updated_at"] or "") >= str(conf["updated_at"] or "")
-    if prefer_rej_email:
-        last_mid, last_raw = rej["last_email_message_id"], rej["last_email_date_raw"]
-    else:
-        last_mid, last_raw = conf["last_email_message_id"], conf["last_email_date_raw"]
-
-    notes_parts = [x for x in (_s(conf["notes"]), _s(rej["notes"])) if x]
-    merged_notes = " | ".join(notes_parts) if notes_parts else None
-
-    cc, cr = conf["confidence"], rej["confidence"]
-    if cc is None and cr is None:
-        merged_conf: Any = None
-    else:
-        merged_conf = max(float(cc or 0), float(cr or 0))
-
-    conn.execute("UPDATE app_events SET app_key = ? WHERE app_key = ?", (conf_key, rej_key))
+    conn.execute("UPDATE app_events SET app_key = ? WHERE app_key = ?", (kept, removed))
     try:
-        conn.execute("UPDATE human_reviews SET app_key = ? WHERE app_key = ?", (conf_key, rej_key))
+        conn.execute("UPDATE human_reviews SET app_key = ? WHERE app_key = ?", (kept, removed))
     except sqlite3.OperationalError:
         pass
 
@@ -404,7 +484,7 @@ def merge_application_pair(conn: sqlite3.Connection, *, app_key_a: str, app_key_
           job_title = ?,
           job_id = ?,
           applied_date = ?,
-          status = 'rejection',
+          status = ?,
           last_update_date = ?,
           last_email_message_id = ?,
           last_email_date_raw = ?,
@@ -417,14 +497,15 @@ def merge_application_pair(conn: sqlite3.Connection, *, app_key_a: str, app_key_
             company,
             job_title,
             job_id,
-            applied_merged,
-            last_update_merged,
+            applied_date,
+            status,
+            last_update_date,
             last_mid,
             last_raw,
-            merged_conf,
-            merged_notes,
+            confidence,
+            notes,
             now,
-            conf_key,
+            kept,
         ),
     )
 
@@ -434,13 +515,14 @@ def merge_application_pair(conn: sqlite3.Connection, *, app_key_a: str, app_key_
         VALUES (?, ?, ?, NULL, ?, ?);
         """,
         (
-            conf_key,
+            kept,
             "manual:merge",
             now,
             json.dumps(
                 {
-                    "merged_from_app_key": rej_key,
-                    "note": "Merged rejection application into this confirmation record.",
+                    "merged_from_app_key": removed,
+                    "field_choices": choices,
+                    "note": "Merged duplicate application records.",
                 },
                 ensure_ascii=False,
             ),
@@ -448,7 +530,7 @@ def merge_application_pair(conn: sqlite3.Connection, *, app_key_a: str, app_key_
         ),
     )
 
-    conn.execute("DELETE FROM applications WHERE app_key = ?", (rej_key,))
+    conn.execute("DELETE FROM applications WHERE app_key = ?", (removed,))
 
-    return {"kept_app_key": conf_key, "removed_app_key": rej_key}
+    return {"kept_app_key": kept, "removed_app_key": removed}
 

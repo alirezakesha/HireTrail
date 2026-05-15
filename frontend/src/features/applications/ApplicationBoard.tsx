@@ -4,6 +4,7 @@ import { apiPost } from '../../api'
 import { Card } from '../../components/ui/Card'
 import { REVIEW_STATUSES } from '../../constants/statuses'
 import type { EnrichedApplication } from '../../hooks/useEnrichedApplications'
+import { MergeDialog, type MergeSubmitPayload } from './MergeDialog'
 
 function fmtDate(s: string | null | undefined) {
   if (!s) return '—'
@@ -24,12 +25,7 @@ function effectiveAppliedAt(r: { applied_date?: string | null; last_update_date:
 const DRAG_APP_KEY_MIME = 'application/x-applyledger-app-key'
 
 function canMergePair(a: EnrichedApplication, b: EnrichedApplication) {
-  const s = new Set([a.status, b.status])
-  return s.has('rejection') && s.has('application_confirmation')
-}
-
-function isMergeParticipant(r: EnrichedApplication) {
-  return r.status === 'rejection' || r.status === 'application_confirmation'
+  return a.app_key !== b.app_key
 }
 
 export const APPLICATION_SORT_MODES = [
@@ -56,6 +52,7 @@ export function ApplicationBoard({ rows, loading, error }: Props) {
   const [statusFilter, setStatusFilter] = useState<string>('all')
   const [sortMode, setSortMode] = useState<ApplicationSortMode>('updated_desc')
   const [draft, setDraft] = useState<Record<string, string>>({})
+  const [mergePair, setMergePair] = useState<{ a: EnrichedApplication; b: EnrichedApplication } | null>(null)
 
   const statuses = useMemo(() => [...new Set(rows.map((r) => r.status))].sort(), [rows])
 
@@ -110,9 +107,10 @@ export function ApplicationBoard({ rows, loading, error }: Props) {
   const rowByKey = useMemo(() => new Map(rows.map((r) => [r.app_key, r])), [rows])
 
   const mergeM = useMutation({
-    mutationFn: (payload: { app_key_a: string; app_key_b: string }) =>
+    mutationFn: (payload: MergeSubmitPayload) =>
       apiPost<{ kept_app_key: string; removed_app_key: string }>('/api/applications/merge', payload),
     onSuccess: () => {
+      setMergePair(null)
       void qc.invalidateQueries({ queryKey: ['applications'] })
       void qc.invalidateQueries({ queryKey: ['timeline'], refetchType: 'all' })
     },
@@ -207,12 +205,9 @@ export function ApplicationBoard({ rows, loading, error }: Props) {
           Showing <span className="font-medium text-[var(--color-ink)]">{sorted.length}</span> of {rows.length}
         </p>
         <p className="w-full text-xs leading-relaxed text-[var(--color-muted)] sm:col-span-2 xl:col-span-4">
-          <span className="font-medium text-[var(--color-ink)]">Merge:</span> drag one card onto another only when one row is saved as{' '}
-          <span className="font-mono text-[var(--color-accent)]">rejection</span> and the other as{' '}
-          <span className="font-mono text-[var(--color-accent)]">application_confirmation</span> (exact status strings from the
-          database). The confirmation row is kept and updated; the rejection row is removed. Pairs like two rejections,
-          two confirmations, or interview/follow_up cannot merge. Unsaved status changes in the dropdown are not
-          used—save first, or merge using the current stored statuses.
+          <span className="font-medium text-[var(--color-ink)]">Merge:</span> drag any card onto another (different
+          application). A dialog lets you choose which record to keep and which field values to use; suggestions pick
+          the more complete text where possible.
         </p>
       </Card>
 
@@ -221,7 +216,7 @@ export function ApplicationBoard({ rows, loading, error }: Props) {
           const applied = effectiveAppliedAt(r)
           const current = statusForRow(r)
           const dirty = current !== r.status
-          const draggableMerge = isMergeParticipant(r)
+          const draggableMerge = true
           const fromKey = dragSourceKeyRef.current
           const targetKey = r.app_key
           const pairOk =
@@ -272,11 +267,7 @@ export function ApplicationBoard({ rows, loading, error }: Props) {
                 const a = rowByKey.get(dragged)
                 const b = rowByKey.get(targetKey)
                 if (!a || !b || !canMergePair(a, b)) return
-                const conf = a.status === 'application_confirmation' ? a : b
-                const rej = a.status === 'rejection' ? a : b
-                const msg = `Merge rejection "${rej.company ?? rej.app_key}" into application "${conf.company ?? conf.app_key}"? The rejection row will be deleted.`
-                if (!window.confirm(msg)) return
-                mergeM.mutate({ app_key_a: dragged, app_key_b: targetKey })
+                setMergePair({ a: rowByKey.get(dragged)!, b: rowByKey.get(targetKey)! })
               }}
               className={`flex flex-col gap-4 p-5 transition-shadow ${
                 draggableMerge ? 'cursor-grab active:cursor-grabbing' : ''
@@ -355,6 +346,16 @@ export function ApplicationBoard({ rows, loading, error }: Props) {
           )
         })}
       </div>
+
+      {mergePair && (
+        <MergeDialog
+          rowA={mergePair.a}
+          rowB={mergePair.b}
+          submitting={mergeM.isPending}
+          onCancel={() => setMergePair(null)}
+          onConfirm={(payload) => mergeM.mutate(payload)}
+        />
+      )}
 
       {mergeM.isError && (
         <Card className="border-[var(--color-danger)]/40 bg-[var(--color-danger)]/5">

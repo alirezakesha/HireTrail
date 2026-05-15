@@ -1,6 +1,13 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { apiPost, type EmbeddingMergeSuggestionsResponse } from '../../api'
+import { useState } from 'react'
+import {
+  apiPost,
+  type ApplicationRow,
+  type EmbeddingMergeAppSummary,
+  type EmbeddingMergeSuggestionsResponse,
+} from '../../api'
 import { Card } from '../../components/ui/Card'
+import { MergeDialog, type MergeSubmitPayload } from '../applications/MergeDialog'
 
 const ANALYZE_MS = 120_000
 
@@ -15,8 +22,25 @@ function pctSimilarity(sim: number) {
   return `${(sim * 100).toFixed(1)}%`
 }
 
+function summaryAsAppRow(s: EmbeddingMergeAppSummary): ApplicationRow {
+  return {
+    app_key: s.app_key,
+    company: s.company,
+    job_title: s.job_title,
+    job_id: s.job_id,
+    status: s.status,
+    applied_date: s.applied_date,
+    last_update_date: s.last_update_date,
+    last_email_date_raw: s.last_update_date,
+    confidence: s.confidence,
+    notes: s.notes,
+    updated_at: s.updated_at,
+  }
+}
+
 export function EmbeddingMergePanel() {
   const qc = useQueryClient()
+  const [mergePair, setMergePair] = useState<{ a: ApplicationRow; b: ApplicationRow } | null>(null)
 
   const analyzeM = useMutation({
     mutationFn: () =>
@@ -28,9 +52,10 @@ export function EmbeddingMergePanel() {
   })
 
   const mergeM = useMutation({
-    mutationFn: (p: { app_key_a: string; app_key_b: string }) =>
+    mutationFn: (p: MergeSubmitPayload) =>
       apiPost<{ kept_app_key: string; removed_app_key: string }>('/api/applications/merge', p),
     onSuccess: async () => {
+      setMergePair(null)
       await qc.invalidateQueries({ queryKey: ['applications'] })
       await qc.invalidateQueries({ queryKey: ['timeline'], refetchType: 'all' })
       try {
@@ -135,14 +160,14 @@ export function EmbeddingMergePanel() {
                         type="button"
                         disabled={mergeM.isPending || analyzeM.isPending}
                         onClick={() =>
-                          mergeM.mutate({
-                            app_key_a: row.confirmation.app_key,
-                            app_key_b: c.rejection.app_key,
+                          setMergePair({
+                            a: summaryAsAppRow(row.confirmation),
+                            b: summaryAsAppRow(c.rejection),
                           })
                         }
                         className="shrink-0 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-1.5 text-xs font-medium text-[var(--color-ink)] hover:bg-[var(--color-border)] disabled:cursor-not-allowed disabled:opacity-50"
                       >
-                        Merge into open row
+                        Review merge…
                       </button>
                     </div>
                   </div>
@@ -152,6 +177,16 @@ export function EmbeddingMergePanel() {
           </div>
         </Card>
       ))}
+
+      {mergePair && (
+        <MergeDialog
+          rowA={mergePair.a}
+          rowB={mergePair.b}
+          submitting={mergeM.isPending}
+          onCancel={() => setMergePair(null)}
+          onConfirm={(payload) => mergeM.mutate(payload)}
+        />
+      )}
     </div>
   )
 }
