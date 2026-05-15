@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { apiGet, type ApplicationRow, type TimelineRow } from './api'
 import { ApplicationBoard } from './features/applications/ApplicationBoard'
 import { EmbeddingMergePanel } from './features/embedding-merge/EmbeddingMergePanel'
@@ -47,6 +47,20 @@ export function MainApp({ onSignOut }: Props) {
   })
 
   const enriched = useEnrichedApplications(appsQ.data, timelineQ.data)
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const auth = params.get('gmail_auth')
+    if (!auth) return
+    if (auth === 'ok') {
+      void qc.invalidateQueries({ queryKey: ['meta'] })
+    }
+    params.delete('gmail_auth')
+    params.delete('message')
+    const q = params.toString()
+    const next = `${window.location.pathname}${q ? `?${q}` : ''}`
+    window.history.replaceState({}, '', next)
+  }, [qc])
 
   return (
     <AppShell tab={tab} onTab={setTab} onSignOut={onSignOut}>

@@ -22,12 +22,23 @@ from typing import Any, Optional
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
-from starlette.responses import StreamingResponse
+from starlette.responses import RedirectResponse, StreamingResponse
 
 from applyledger import db
 from applyledger.config import load_settings
 from applyledger.embedding_merge import compute_embedding_merge_suggestions
 from applyledger.gmail_client import get_gmail_service
+from applyledger.gmail_oauth import (
+    clear_oauth_pending,
+    flow_code_verifier,
+    load_oauth_pending,
+    make_oauth_flow,
+    new_oauth_state,
+    oauth_client_kind,
+    resolve_redirect_uri,
+    save_credentials_json,
+    save_oauth_pending,
+)
 from applyledger.sync_service import ensure_credentials_files, run_sync
 
 app = FastAPI(title="ApplyLedger API", version="0.1.0")
@@ -384,14 +395,85 @@ class SyncBody(BaseModel):
     max_body_chars: int = 3500
 
 
-@app.post("/api/auth/gmail")
-def api_auth_gmail() -> dict[str, str]:
+@app.get("/api/auth/gmail/start")
+def api_auth_gmail_start() -> RedirectResponse:
+    """Browser redirect to Google (Web OAuth client — matches `client_secret.json`)."""
     s, err = _settings_or_error()
     if err or not s:
         raise HTTPException(status_code=503, detail=err or "Settings not loaded")
     cred_err = ensure_credentials_files(s)
     if cred_err:
         raise HTTPException(status_code=400, detail=cred_err)
+    if oauth_client_kind(s.google_client_secrets_file) != "web":
+        raise HTTPException(
+            status_code=400,
+            detail="Web OAuth start requires a 'web' client JSON. Use Desktop client + POST /api/auth/gmail instead.",
+        )
+    redirect_uri = resolve_redirect_uri(s.google_client_secrets_file, s.gmail_oauth_redirect_uri)
+    flow = make_oauth_flow(s, redirect_uri)
+    oauth_state = new_oauth_state()
+    auth_url, _ = flow.authorization_url(
+        access_type="offline",
+        include_granted_scopes="true",
+        prompt="consent",
+        state=oauth_state,
+    )
+    save_oauth_pending(
+        s.gmail_token_file,
+        state=oauth_state,
+        code_verifier=flow_code_verifier(flow),
+        redirect_uri=redirect_uri,
+    )
+    return RedirectResponse(auth_url)
+
+
+@app.get("/api/auth/gmail/callback")
+def api_auth_gmail_callback(
+    code: str | None = None,
+    state: str | None = None,
+    error: str | None = None,
+) -> RedirectResponse:
+    s, err = _settings_or_error()
+    if err or not s:
+        raise HTTPException(status_code=503, detail=err or "Settings not loaded")
+    front = s.gmail_oauth_frontend_url.rstrip("/")
+    if error:
+        clear_oauth_pending(s.gmail_token_file)
+        return RedirectResponse(f"{front}/?gmail_auth=error&message={error}")
+    if not code:
+        raise HTTPException(status_code=400, detail="Missing OAuth authorization code.")
+    try:
+        pending = load_oauth_pending(s.gmail_token_file)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    if not state or state != pending["state"]:
+        raise HTTPException(status_code=400, detail="Invalid or missing OAuth state; try Connect Gmail again.")
+    try:
+        flow = make_oauth_flow(s, pending["redirect_uri"])
+        flow.fetch_token(code=code, code_verifier=pending["code_verifier"])
+        save_credentials_json(flow.credentials, s.gmail_token_file)
+    finally:
+        clear_oauth_pending(s.gmail_token_file)
+    return RedirectResponse(f"{front}/?gmail_auth=ok")
+
+
+@app.post("/api/auth/gmail")
+def api_auth_gmail() -> dict[str, str]:
+    """Desktop OAuth only (`run_local_server`). Web clients should use GET /api/auth/gmail/start."""
+    s, err = _settings_or_error()
+    if err or not s:
+        raise HTTPException(status_code=503, detail=err or "Settings not loaded")
+    cred_err = ensure_credentials_files(s)
+    if cred_err:
+        raise HTTPException(status_code=400, detail=cred_err)
+    if oauth_client_kind(s.google_client_secrets_file) == "web":
+        redirect_uri = resolve_redirect_uri(s.google_client_secrets_file, s.gmail_oauth_redirect_uri)
+        return {
+            "message": "Web OAuth client: open /api/auth/gmail/start in the browser.",
+            "auth_start_url": f"/api/auth/gmail/start",
+            "redirect_uri": redirect_uri,
+            "gmail_token_file": s.gmail_token_file,
+        }
     get_gmail_service(
         client_secrets_file=s.google_client_secrets_file,
         token_file=s.gmail_token_file,

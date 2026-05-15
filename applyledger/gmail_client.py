@@ -7,6 +7,8 @@ from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 
+from applyledger.gmail_oauth import oauth_client_kind
+
 
 def get_gmail_service(*, client_secrets_file: str, token_file: str, scopes: list[str]):
     creds = None
@@ -18,9 +20,14 @@ def get_gmail_service(*, client_secrets_file: str, token_file: str, scopes: list
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
             creds.refresh(Request())
-        else:
+        elif oauth_client_kind(client_secrets_file) == "installed":
             flow = InstalledAppFlow.from_client_secrets_file(client_secrets_file, scopes)
             creds = flow.run_local_server(port=0)
+        else:
+            raise RuntimeError(
+                "Gmail is not authorized yet. In the app, open the Sync tab and click "
+                "'Connect Gmail', or visit /api/auth/gmail/start while the API server is running."
+            )
         token_path.write_text(creds.to_json(), encoding="utf-8")
 
     return build("gmail", "v1", credentials=creds)

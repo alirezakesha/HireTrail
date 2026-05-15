@@ -40,11 +40,19 @@ export function SyncPanel({ onSynced }: Props) {
   const [syncPhase, setSyncPhase] = useState<string | null>(null)
 
   const authM = useMutation({
-    mutationFn: () => apiPost<{ gmail_token_file: string; message: string }>('/api/auth/gmail'),
-    onSuccess: () => {
+    mutationFn: () => apiPost<{ gmail_token_file: string; message: string; auth_start_url?: string }>('/api/auth/gmail'),
+    onSuccess: (data) => {
+      if (data.auth_start_url) {
+        window.location.href = data.auth_start_url
+        return
+      }
       void qc.invalidateQueries({ queryKey: ['meta'] })
     },
   })
+
+  function connectGmail() {
+    window.location.href = '/api/auth/gmail/start'
+  }
 
   const syncM = useMutation({
     mutationFn: () =>
@@ -73,16 +81,19 @@ export function SyncPanel({ onSynced }: Props) {
       <Card>
         <h2 className="font-display text-lg font-semibold text-[var(--color-ink)]">Gmail OAuth</h2>
         <p className="mt-3 text-sm leading-relaxed text-[var(--color-muted)]">
-          Uses the same desktop OAuth flow as the notebook: the Python server opens a browser on this machine and
-          writes <code className="rounded bg-black/30 px-1.5 py-0.5 font-mono text-xs">token.json</code>.
+          Uses your Google Web OAuth client (<span className="font-mono">client_secret.json</span>). You sign in with
+          Google; tokens are saved to{' '}
+          <code className="rounded bg-black/30 px-1.5 py-0.5 font-mono text-xs">token.json</code> on the API server.
+          Redirect URI in Google Cloud must be{' '}
+          <code className="font-mono text-xs">http://127.0.0.1:8000/api/auth/gmail/callback</code>.
         </p>
         <button
           type="button"
           disabled={authM.isPending}
-          onClick={() => authM.mutate()}
+          onClick={connectGmail}
           className="mt-6 w-full rounded-xl bg-[var(--color-accent)] px-4 py-3 text-sm font-semibold text-[#1a1408] shadow-lg shadow-[var(--color-accent)]/20 transition hover:brightness-110 disabled:opacity-50"
         >
-          {authM.isPending ? 'Opening browser…' : 'Authenticate Gmail'}
+          Connect Gmail
         </button>
         {authM.isSuccess && (
           <p className="mt-4 text-sm text-[var(--color-ok)]">

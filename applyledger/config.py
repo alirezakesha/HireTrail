@@ -20,6 +20,8 @@ class Settings:
     openai_embedding_model: str
     """Batch size for `client.embeddings.create` input lists."""
     embedding_batch_size: int
+    gmail_oauth_redirect_uri: str
+    gmail_oauth_frontend_url: str
 
 
 def load_settings() -> Settings:
@@ -30,11 +32,17 @@ def load_settings() -> Settings:
         raise ValueError("Missing OPENAI_API_KEY (or openai_api_key) in .env")
 
     scopes = os.getenv("GMAIL_SCOPES", "https://www.googleapis.com/auth/gmail.readonly").split()
+    secrets_file = os.getenv("GOOGLE_CLIENT_SECRETS_FILE", "credentials.json")
 
     return Settings(
-        google_client_secrets_file=os.getenv("GOOGLE_CLIENT_SECRETS_FILE", "credentials.json"),
+        google_client_secrets_file=secrets_file,
         gmail_token_file=os.getenv("GMAIL_TOKEN_FILE", "token.json"),
         gmail_scopes=scopes,
+        gmail_oauth_redirect_uri=os.getenv(
+            "GMAIL_OAUTH_REDIRECT_URI",
+            "http://127.0.0.1:8000/api/auth/gmail/callback",
+        ),
+        gmail_oauth_frontend_url=os.getenv("GMAIL_OAUTH_FRONTEND_URL", "http://127.0.0.1:5173"),
         openai_api_key=openai_key,
         openai_model=os.getenv("OPENAI_MODEL", "gpt-5-nano"),
         db_path=os.getenv("JOBTRACKER_DB", "jobtracker.sqlite3"),
