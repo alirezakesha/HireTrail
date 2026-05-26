@@ -86,6 +86,31 @@ export type EmbeddingMergeSuggestionsResponse = {
   hint: string | null
 }
 
+export type DbTableMeta = {
+  name: string
+  row_count: number
+  primary_key: string
+  sort: string
+}
+
+export type DbTableRowItem = {
+  pk: string | number
+  email_sent_ms: number
+  email_sent_label: string | null
+  data: Record<string, unknown>
+}
+
+export type DbTableRowsResponse = {
+  table: string
+  primary_key: string
+  columns: string[]
+  immutable_columns: string[]
+  rows: DbTableRowItem[]
+  total: number
+  limit: number
+  offset: number
+}
+
 /** Avoid hanging forever when the API is down or the Vite proxy target is not running. */
 const DEFAULT_REQUEST_MS = 18_000
 
@@ -121,6 +146,34 @@ async function fetchWithTimeout(input: string, init: RequestInit | undefined, ms
 
 export async function apiGet<T>(path: string): Promise<T> {
   const r = await fetchWithTimeout(path, undefined, DEFAULT_REQUEST_MS)
+  if (!r.ok) throw new Error(await parseError(r))
+  return r.json() as Promise<T>
+}
+
+export async function apiPatch<T>(path: string, body: unknown): Promise<T> {
+  const r = await fetchWithTimeout(
+    path,
+    {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    },
+    DEFAULT_REQUEST_MS,
+  )
+  if (!r.ok) throw new Error(await parseError(r))
+  return r.json() as Promise<T>
+}
+
+export async function apiDelete<T>(path: string, body: unknown): Promise<T> {
+  const r = await fetchWithTimeout(
+    path,
+    {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    },
+    DEFAULT_REQUEST_MS,
+  )
   if (!r.ok) throw new Error(await parseError(r))
   return r.json() as Promise<T>
 }

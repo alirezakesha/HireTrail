@@ -29,6 +29,12 @@ from applyledger.config import load_settings
 from applyledger.embedding_merge import compute_embedding_merge_suggestions
 from applyledger.gmail_client import get_gmail_service
 from applyledger.sync_service import ensure_credentials_files, run_sync
+from applyledger.table_browser import (
+    delete_table_row,
+    fetch_table_rows,
+    list_tables,
+    update_table_row,
+)
 
 app = FastAPI(title="ApplyLedger API", version="0.1.0")
 
@@ -93,7 +99,89 @@ def api_applications() -> list[dict[str, Any]]:
             ORDER BY datetime(updated_at) DESC;
             """
         ).fetchall()
-        return [dict(r) for r in rows]
+        out: list[dict[str, Any]] = []
+        for r in rows:
+            d = dict(r)
+            d["applied_date"] = _application_applied_date_display(
+                conn, d["app_key"], d["status"], d.get("applied_date")
+            )
+            out.append(d)
+        return out
+    finally:
+        conn.close()
+
+
+def _application_applied_date_display(
+    conn: sqlite3.Connection, app_key: str, status: str, stored: str | None
+) -> str | None:
+    conf_date = _first_confirmation_date(conn, app_key)
+    if status in ("rejection", "interview"):
+        return conf_date
+    return stored or conf_date
+
+
+@app.get("/api/applications/{app_key}")
+def api_application_detail(app_key: str) -> dict[str, Any]:
+    conn = _conn()
+    try:
+        detail = db.get_application_detail(conn, app_key.strip())
+        if detail is None:
+            raise HTTPException(status_code=404, detail="Application not found.")
+        app = detail["application"]
+        app["applied_date"] = _application_applied_date_display(
+            conn, app["app_key"], app["status"], app.get("applied_date")
+        )
+        app["rejection_at"] = _max_event_date(conn, app_key, "rejection")
+        app["interview_at"] = _max_event_date(conn, app_key, "interview")
+        events_out: list[dict[str, Any]] = []
+        for e in detail["events"]:
+            events_out.append(
+                {
+                    **e,
+                    "status": _parse_event_status(e.get("raw_json"), e["event_type"]),
+                }
+            )
+        return {
+            "application": app,
+            "events": events_out,
+            "last_email": detail["last_email"],
+        }
+    finally:
+        conn.close()
+
+
+class ApplicationPatchBody(BaseModel):
+    company: str | None = None
+    job_title: str | None = None
+    job_id: str | None = None
+    notes: str | None = None
+    applied_date: str | None = None
+    status: str | None = None
+    status_note: str | None = None
+
+
+@app.patch("/api/applications/{app_key}")
+def api_application_patch(app_key: str, body: ApplicationPatchBody) -> dict[str, str]:
+    conn = _conn()
+    try:
+        fields_set = set(body.model_fields_set)
+        try:
+            db.patch_application(
+                conn,
+                app_key=app_key.strip(),
+                company=body.company,
+                job_title=body.job_title,
+                job_id=body.job_id,
+                notes=body.notes,
+                applied_date=body.applied_date,
+                status=body.status if "status" in fields_set else None,
+                status_note=body.status_note,
+                update_fields=fields_set - {"status", "status_note"},
+            )
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        conn.commit()
+        return {"ok": "true", "app_key": app_key.strip()}
     finally:
         conn.close()
 
@@ -300,7 +388,11 @@ def api_timeline() -> list[dict[str, Any]]:
             rejection_at = _max_event_date(conn, app_key, "rejection")
             interview_at = _max_event_date(conn, app_key, "interview")
 
-            applied_guess = a["applied_date"] or _first_confirmation_date(conn, app_key) or a["created_at"]
+            conf_date = _first_confirmation_date(conn, app_key)
+            if status in ("rejection", "interview"):
+                applied_guess = conf_date or a["created_at"]
+            else:
+                applied_guess = a["applied_date"] or conf_date or a["created_at"]
             start = applied_guess or a["updated_at"]
             end = rejection_at or interview_at or a["last_update_date"] or a["updated_at"] or start
 
@@ -380,8 +472,8 @@ def api_timeline_outcomes(body: TimelineOutcomesBody) -> dict[str, int]:
 
 class SyncBody(BaseModel):
     query: str = "in:inbox (category:primary OR category:updates)"
-    max_results: int = 200
-    max_body_chars: int = 3500
+    max_results: int = 10
+    max_body_chars: int = 1000
 
 
 @app.post("/api/auth/gmail")
@@ -449,6 +541,68 @@ async def api_sync(body: SyncBody) -> StreamingResponse:
             "X-Accel-Buffering": "no",
         },
     )
+
+
+class TableRowPatchBody(BaseModel):
+    pk: str | int
+    fields: dict[str, Any] = Field(default_factory=dict)
+
+
+class TableRowDeleteBody(BaseModel):
+    pk: str | int
+
+
+@app.get("/api/db/tables")
+def api_db_tables() -> list[dict[str, Any]]:
+    conn = _conn()
+    try:
+        return list_tables(conn)
+    finally:
+        conn.close()
+
+
+@app.get("/api/db/tables/{table_name}")
+def api_db_table_rows(
+    table_name: str,
+    limit: int = 100,
+    offset: int = 0,
+) -> dict[str, Any]:
+    conn = _conn()
+    try:
+        try:
+            return fetch_table_rows(conn, table_name, limit=limit, offset=offset)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+    finally:
+        conn.close()
+
+
+@app.patch("/api/db/tables/{table_name}")
+def api_db_table_row_patch(table_name: str, body: TableRowPatchBody) -> dict[str, Any]:
+    conn = _conn()
+    try:
+        try:
+            result = update_table_row(conn, table_name, pk=body.pk, fields=body.fields)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        conn.commit()
+        return result
+    finally:
+        conn.close()
+
+
+@app.delete("/api/db/tables/{table_name}")
+def api_db_table_row_delete(table_name: str, body: TableRowDeleteBody) -> dict[str, Any]:
+    conn = _conn()
+    try:
+        try:
+            result = delete_table_row(conn, table_name, pk=body.pk)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        conn.commit()
+        return result
+    finally:
+        conn.close()
 
 
 @app.get("/health")

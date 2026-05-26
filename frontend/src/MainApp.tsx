@@ -4,6 +4,7 @@ import { apiGet, type ApplicationRow, type TimelineRow } from './api'
 import { ApplicationBoard } from './features/applications/ApplicationBoard'
 import { EmbeddingMergePanel } from './features/embedding-merge/EmbeddingMergePanel'
 import { SyncPanel } from './features/sync/SyncPanel'
+import { TablesPanel } from './features/tables/TablesPanel'
 import { TimelinePanel } from './features/timeline/TimelinePanel'
 import { useEnrichedApplications } from './hooks/useEnrichedApplications'
 import { AppShell, type MainTab } from './layout/AppShell'
@@ -22,6 +23,8 @@ export function MainApp({ onSignOut }: Props) {
       qc.invalidateQueries({ queryKey: ['applications'] }),
       qc.invalidateQueries({ queryKey: ['timeline'], refetchType: 'all' }),
       qc.invalidateQueries({ queryKey: ['meta'] }),
+      qc.invalidateQueries({ queryKey: ['db-tables-meta'] }),
+      qc.invalidateQueries({ queryKey: ['db-table-rows'] }),
     ]).then(() => undefined)
   }, [qc])
 
@@ -67,6 +70,7 @@ export function MainApp({ onSignOut }: Props) {
           onSaved={onTimelineSaved}
         />
       )}
+      {tab === 'Tables' && <TablesPanel />}
     </AppShell>
   )
 }

@@ -34,6 +34,7 @@ Rules:
 - If it is not about a job application process (e.g. grocery promos, receipts), set is_job_related=false.
 - If it's about a job posting alert or LinkedIn "add connection" etc, keep is_job_related=true but category="job_alert" or "other".
 - Prefer company/job_title/job_id only when clearly supported; otherwise null.
+- Set applied_date ONLY when category is application_confirmation (when the user actually applied or received an application-received email). For rejection, interview, and other categories, applied_date MUST be null.
 """
 
 

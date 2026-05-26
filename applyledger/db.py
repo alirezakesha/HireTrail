@@ -230,7 +230,8 @@ def upsert_application_from_extraction(
         ),
     )
 
-    applied_date = extracted.get("applied_date")
+    # Only application_confirmation emails set applied_date; rejections must not copy the email date.
+    applied_date = extracted.get("applied_date") if status == "application_confirmation" else None
     event_date = extracted.get("event_date")  # can be None; UI can still show raw date
     conf = extracted.get("confidence")
 
@@ -245,6 +246,11 @@ def upsert_application_from_extraction(
           company=COALESCE(excluded.company, applications.company),
           job_title=COALESCE(excluded.job_title, applications.job_title),
           job_id=COALESCE(excluded.job_id, applications.job_id),
+          applied_date=CASE
+            WHEN excluded.status = 'application_confirmation'
+            THEN COALESCE(applications.applied_date, excluded.applied_date)
+            ELSE applications.applied_date
+          END,
           status=excluded.status,
           last_update_date=excluded.last_update_date,
           last_email_message_id=excluded.last_email_message_id,
@@ -287,6 +293,100 @@ def upsert_application_from_extraction(
     )
 
     return True
+
+
+def get_application_detail(conn: sqlite3.Connection, app_key: str) -> Optional[dict[str, Any]]:
+    """Full application row plus timeline events (newest email/event first)."""
+    row = conn.execute("SELECT * FROM applications WHERE app_key = ? LIMIT 1;", (app_key,)).fetchone()
+    if row is None:
+        return None
+
+    events = conn.execute(
+        """
+        SELECT id, event_type, event_date, gmail_message_id, raw_json, created_at
+        FROM app_events
+        WHERE app_key = ?
+        ORDER BY datetime(COALESCE(event_date, created_at)) DESC, id DESC;
+        """,
+        (app_key,),
+    ).fetchall()
+
+    last_mid = row["last_email_message_id"]
+    last_email: dict[str, Any] | None = None
+    if last_mid:
+        em = conn.execute(
+            """
+            SELECT gmail_message_id, subject, from_addr, to_addr, date_raw, snippet, internal_date_ms
+            FROM emails WHERE gmail_message_id = ? LIMIT 1;
+            """,
+            (last_mid,),
+        ).fetchone()
+        if em is not None:
+            last_email = dict(em)
+
+    return {
+        "application": dict(row),
+        "events": [dict(e) for e in events],
+        "last_email": last_email,
+    }
+
+
+def patch_application(
+    conn: sqlite3.Connection,
+    *,
+    app_key: str,
+    company: str | None = None,
+    job_title: str | None = None,
+    job_id: str | None = None,
+    notes: str | None = None,
+    applied_date: str | None = None,
+    status: str | None = None,
+    status_note: str | None = None,
+    update_fields: set[str] | None = None,
+) -> None:
+    """Update editable application columns; status changes go through human review."""
+    row = conn.execute(
+        "SELECT status FROM applications WHERE app_key = ? LIMIT 1;",
+        (app_key,),
+    ).fetchone()
+    if row is None:
+        raise ValueError("Application not found.")
+
+    def _norm_optional(v: str | None) -> str | None:
+        if v is None:
+            return None
+        t = str(v).strip()
+        return t or None
+
+    field_map = {
+        "company": company,
+        "job_title": job_title,
+        "job_id": job_id,
+        "notes": notes,
+        "applied_date": applied_date,
+    }
+    updates: dict[str, Any] = {}
+    for key, val in field_map.items():
+        if update_fields is not None and key not in update_fields:
+            continue
+        updates[key] = _norm_optional(val)
+
+    if updates:
+        set_clause = ", ".join(f"{k} = ?" for k in updates)
+        conn.execute(
+            f"UPDATE applications SET {set_clause}, updated_at = ? WHERE app_key = ?;",
+            [*updates.values(), utcnow_iso(), app_key],
+        )
+
+    if status is not None and status != row["status"]:
+        add_human_review(
+            conn,
+            app_key=app_key,
+            decided_status=status,
+            note=status_note,
+            source_event_id=None,
+            previous_status=row["status"],
+        )
 
 
 def add_human_review(

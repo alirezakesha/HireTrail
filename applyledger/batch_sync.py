@@ -215,7 +215,6 @@ def run_process_inbox_batch(
                     model=settings.openai_model,
                 )
 
-
                 processed_now += 1
 
                 full = row["full"]
@@ -239,7 +238,6 @@ def run_process_inbox_batch(
                     )
                     stored_app_records += 1
 
-                conn.commit()
                 step += 1
                 _emit(
                     step,
@@ -248,6 +246,8 @@ def run_process_inbox_batch(
                     stored_app_records=stored_app_records,
                     last_message_id=mid,
                 )
+
+            conn.commit()
     finally:
         conn.close()
 

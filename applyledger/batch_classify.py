@@ -41,6 +41,7 @@ Rules:
 - results MUST have the SAME LENGTH as input emails, and MUST be in the SAME ORDER.
 - gmail_message_id in each result MUST equal the corresponding input gmail_message_id.
 - Apply the same classification rules as for single emails (non-job mail, job alerts, etc.).
+- applied_date only for category application_confirmation; null for rejection, interview, and all other categories.
 """
 
 
@@ -64,7 +65,8 @@ def classify_emails_batch_openai(
     if not batch:
         return {}
 
-    completion_cap = min(8000, 500 + 180 * max(1, len(batch)))
+    # ~120 tokens per email in JSON; cap avoids slow over-generation on large batches
+    completion_cap = min(4000, 350 + 120 * max(1, len(batch)))
 
     resp = client.chat.completions.create(
         model=model,

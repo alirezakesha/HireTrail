@@ -90,6 +90,33 @@ def test_upsert_application_from_extraction_fills_emails_table(conn: sqlite3.Con
     assert app["status"] == "application_confirmation"
 
 
+def test_rejection_does_not_set_applied_date(conn: sqlite3.Connection) -> None:
+    db.upsert_application_from_extraction(
+        conn,
+        gmail_message_id="g-rej",
+        gmail_thread_id=None,
+        internal_date_ms=1_700_000_000_000,
+        from_addr="hr@co.com",
+        to_addr=None,
+        subject="Update on your application",
+        date_raw="Mon, 25 May 2026 10:00:00 +0000",
+        snippet="not moving forward",
+        body_text="rejection body",
+        extracted={
+            "category": "rejection",
+            "company": "Co",
+            "job_title": "Dev",
+            "applied_date": "2026-05-25T10:00:00+00:00",
+            "event_date": "2026-05-25T10:00:00+00:00",
+            "confidence": 0.9,
+        },
+    )
+    conn.commit()
+    app = conn.execute("SELECT applied_date, status FROM applications WHERE company = 'Co'").fetchone()
+    assert app["status"] == "rejection"
+    assert app["applied_date"] is None
+
+
 def test_merge_application_pair_two_interviews(conn: sqlite3.Connection) -> None:
     """Any two distinct rows can merge; survivor and fields follow choices."""
     ex_a = {

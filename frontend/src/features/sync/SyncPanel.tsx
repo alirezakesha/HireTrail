@@ -31,11 +31,19 @@ function progressFromLine(line: SyncStreamLine): number {
   return Math.min(100, Math.round((100 * step) / steps_total))
 }
 
+function parseIntInRange(raw: string, min: number, max: number, fallback: number): number {
+  const trimmed = raw.trim()
+  if (!trimmed) return fallback
+  const n = Number.parseInt(trimmed, 10)
+  if (!Number.isFinite(n)) return fallback
+  return Math.min(max, Math.max(min, n))
+}
+
 export function SyncPanel({ onSynced }: Props) {
   const qc = useQueryClient()
   const [query, setQuery] = useState(DEFAULT_GMAIL_QUERY)
-  const [maxResults, setMaxResults] = useState(200)
-  const [maxBody, setMaxBody] = useState(3500)
+  const [maxResultsInput, setMaxResultsInput] = useState('10')
+  const [maxBodyInput, setMaxBodyInput] = useState('1000')
   const [syncProgress, setSyncProgress] = useState(0)
   const [syncPhase, setSyncPhase] = useState<string | null>(null)
 
@@ -51,8 +59,8 @@ export function SyncPanel({ onSynced }: Props) {
       apiStreamSync(
         {
           query,
-          max_results: maxResults,
-          max_body_chars: maxBody,
+          max_results: parseIntInRange(maxResultsInput, 10, 500, 10),
+          max_body_chars: parseIntInRange(maxBodyInput, 500, 8000, 1000),
         },
         (line) => {
           setSyncPhase(line.phase === 'error' ? null : line.phase)
@@ -115,28 +123,30 @@ export function SyncPanel({ onSynced }: Props) {
               Max emails
             </label>
             <input
-              type="number"
-              min={10}
-              max={500}
-              step={10}
-              value={maxResults}
-              onChange={(e) => setMaxResults(Number(e.target.value))}
+              type="text"
+              inputMode="numeric"
+              pattern="[0-9]*"
+              placeholder="10"
+              value={maxResultsInput}
+              onChange={(e) => setMaxResultsInput(e.target.value.replace(/\D/g, ''))}
               className="mt-2 w-full rounded-xl border border-[var(--color-border)] bg-black/25 px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-[var(--color-accent)]/40"
             />
+            <p className="mt-1 text-xs text-[var(--color-muted)]">10–500; empty uses 10</p>
           </div>
           <div>
             <label className="text-xs font-medium uppercase tracking-wide text-[var(--color-muted)]">
               Max body chars (OpenAI)
             </label>
             <input
-              type="number"
-              min={500}
-              max={8000}
-              step={250}
-              value={maxBody}
-              onChange={(e) => setMaxBody(Number(e.target.value))}
+              type="text"
+              inputMode="numeric"
+              pattern="[0-9]*"
+              placeholder="1000"
+              value={maxBodyInput}
+              onChange={(e) => setMaxBodyInput(e.target.value.replace(/\D/g, ''))}
               className="mt-2 w-full rounded-xl border border-[var(--color-border)] bg-black/25 px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-[var(--color-accent)]/40"
             />
+            <p className="mt-1 text-xs text-[var(--color-muted)]">500–8000; empty uses 1000</p>
           </div>
         </div>
         {syncM.isPending && (

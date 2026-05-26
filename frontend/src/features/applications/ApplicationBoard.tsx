@@ -4,22 +4,14 @@ import { apiPost } from '../../api'
 import { Card } from '../../components/ui/Card'
 import { REVIEW_STATUSES } from '../../constants/statuses'
 import type { EnrichedApplication } from '../../hooks/useEnrichedApplications'
+import { effectiveAppliedAt, fmtDate } from './applicationDisplay'
+import { ApplicationDetailDialog } from './ApplicationDetailDialog'
 import { MergeDialog, type MergeSubmitPayload } from './MergeDialog'
-
-function fmtDate(s: string | null | undefined) {
-  if (!s) return '—'
-  const d = s.slice(0, 10)
-  return d.length === 10 ? d : s.slice(0, 16).replace('T', ' ')
-}
 
 function parseTimeMs(iso: string | null | undefined): number {
   if (!iso) return 0
   const t = Date.parse(iso)
   return Number.isFinite(t) ? t : 0
-}
-
-function effectiveAppliedAt(r: { applied_date?: string | null; last_update_date: string | null; last_email_date_raw: string | null }) {
-  return r.applied_date ?? r.last_update_date ?? r.last_email_date_raw
 }
 
 const DRAG_APP_KEY_MIME = 'application/x-applyledger-app-key'
@@ -53,6 +45,7 @@ export function ApplicationBoard({ rows, loading, error }: Props) {
   const [sortMode, setSortMode] = useState<ApplicationSortMode>('updated_desc')
   const [draft, setDraft] = useState<Record<string, string>>({})
   const [mergePair, setMergePair] = useState<{ a: EnrichedApplication; b: EnrichedApplication } | null>(null)
+  const [detailRow, setDetailRow] = useState<EnrichedApplication | null>(null)
 
   const statuses = useMemo(() => [...new Set(rows.map((r) => r.status))].sort(), [rows])
 
@@ -205,9 +198,10 @@ export function ApplicationBoard({ rows, loading, error }: Props) {
           Showing <span className="font-medium text-[var(--color-ink)]">{sorted.length}</span> of {rows.length}
         </p>
         <p className="w-full text-xs leading-relaxed text-[var(--color-muted)] sm:col-span-2 xl:col-span-4">
+          <span className="font-medium text-[var(--color-ink)]">Details:</span> double-click a card to view and edit
+          full fields, notes, and event history.{' '}
           <span className="font-medium text-[var(--color-ink)]">Merge:</span> drag any card onto another (different
-          application). A dialog lets you choose which record to keep and which field values to use; suggestions pick
-          the more complete text where possible.
+          application).
         </p>
       </Card>
 
@@ -232,6 +226,8 @@ export function ApplicationBoard({ rows, loading, error }: Props) {
             <Card
               key={r.app_key}
               draggable={draggableMerge}
+              onDoubleClick={() => setDetailRow(r)}
+              title="Double-click for details"
               onDragStart={(e) => {
                 if (!draggableMerge) return
                 dragSourceKeyRef.current = r.app_key
@@ -346,6 +342,10 @@ export function ApplicationBoard({ rows, loading, error }: Props) {
           )
         })}
       </div>
+
+      {detailRow && (
+        <ApplicationDetailDialog row={detailRow} onClose={() => setDetailRow(null)} />
+      )}
 
       {mergePair && (
         <MergeDialog
