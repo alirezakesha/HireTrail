@@ -9,6 +9,7 @@ venv/
 .env
 credentials.json
 token.json
+client_secret.json
 jobtracker.sqlite3
 *.sqlite3
 # SQLite WAL mode (not matched by *.sqlite3)
